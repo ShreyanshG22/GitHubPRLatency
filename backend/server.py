@@ -24,6 +24,7 @@ from github_client import validate_webhook_signature, fetch_pr_diff
 from analyzer import analyze_diff
 from comment_bot import post_review_comment
 from diff_parser import parse_diff
+from cpp_analyzer import analyze_cpp, analyze_cpp_blocks
 
 # ─── Config ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -292,6 +293,25 @@ async def process_pull_request(payload: dict, delivery_id: str):
         # Analyze with structured blocks
         result = await analyze_diff(diff, pr_title, pr_author, parsed=parsed)
 
+        # Run static C++ analysis on any C++ files in the diff
+        from diff_parser import Language
+        cpp_files = parsed.files_by_language(Language.CPP)
+        cpp_static_findings = []
+        for cpp_file in cpp_files:
+            report = analyze_cpp_blocks(cpp_file.blocks, cpp_file.path)
+            for f in report.findings:
+                cpp_static_findings.append({
+                    "path": report.file_path,
+                    "line": f.line,
+                    "body": f"[{f.rule}] {f.explanation} — {f.suggestion}",
+                    "severity": {"high": "error", "medium": "warning", "low": "info"}.get(f.severity, "info"),
+                })
+
+        # Merge static findings into LLM comments
+        if cpp_static_findings:
+            result["comments"] = result.get("comments", []) + cpp_static_findings
+            logger.info(f"Added {len(cpp_static_findings)} C++ static findings for {repo_full_name}#{pr_number}")
+
         # Update analysis
         update_data = {
             "summary": result["summary"],
@@ -432,6 +452,11 @@ from pydantic import BaseModel as _BM
 class DiffParseRequest(_BM):
     diff_text: str
 
+class CppAnalyzeRequest(_BM):
+    code: str
+    file_path: str = "<input>"
+    start_line: int = 1
+
 @api_router.post("/parse-diff")
 async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
     """Parse a raw unified diff and return structured code blocks."""
@@ -459,6 +484,21 @@ async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
             }
             for f in parsed.files
         ],
+    }
+
+
+@api_router.post("/analyze-cpp")
+async def analyze_cpp_endpoint(body: CppAnalyzeRequest, request: Request):
+    """Run C++ static performance analysis on submitted code."""
+    await get_current_user(request)
+    report = analyze_cpp(body.code, body.file_path, body.start_line)
+    return {
+        "file_path": report.file_path,
+        "total_findings": report.count,
+        "high": len(report.by_severity("high")),
+        "medium": len(report.by_severity("medium")),
+        "low": len(report.by_severity("low")),
+        "findings": report.to_dicts(),
     }
 
 

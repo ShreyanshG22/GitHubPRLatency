@@ -543,6 +543,386 @@ index 1234567..abcdefg 100644
             self.log(f"   ❌ Unexpected line numbers: {response}")
         return False, {}
 
+    # ─── C++ Analyzer Tests ──────────────────────────────────────────────
+
+    def test_cpp_analyzer_unauthorized(self):
+        """Test C++ analyzer without authentication"""
+        # Clear session cookies
+        self.session.cookies.clear()
+        
+        test_code = "int add(int a, int b) { return a + b; }"
+        
+        success, response = self.run_test(
+            "C++ Analyzer Unauthorized", "POST", "analyze-cpp", 401,
+            {"code": test_code}
+        )
+        return success, response
+
+    def test_cpp_analyzer_clean_code(self):
+        """Test C++ analyzer with clean code (should return 0 findings)"""
+        clean_code = "int add(int a, int b) { return a + b; }"
+        
+        success, response = self.run_test(
+            "C++ Analyzer Clean Code", "POST", "analyze-cpp", 200,
+            {"code": clean_code, "file_path": "clean.cpp", "start_line": 1}
+        )
+        
+        if success:
+            if (response.get("total_findings") == 0 and
+                response.get("high") == 0 and
+                response.get("medium") == 0 and
+                response.get("low") == 0 and
+                response.get("findings") == []):
+                
+                self.log("   ✅ Clean code correctly returns 0 findings")
+                return True, response
+            else:
+                self.log(f"   ❌ Expected 0 findings, got: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_pass_by_value(self):
+        """Test pass-by-value detection (high severity)"""
+        code_with_issue = """void process_data(std::vector<int> data) {
+    data.push_back(42);
+}"""
+        
+        success, response = self.run_test(
+            "C++ Pass By Value", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("high") >= 1 and
+                len(findings) >= 1 and
+                any(f.get("rule") == "pass_by_value" and f.get("severity") == "high" 
+                    for f in findings)):
+                
+                self.log("   ✅ Pass-by-value correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Pass-by-value not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_vector_no_reserve(self):
+        """Test vector push_back without reserve (high severity)"""
+        code_with_issue = """void fill_vector() {
+    std::vector<int> vec;
+    for (int i = 0; i < 1000; ++i) {
+        vec.push_back(i);
+    }
+}"""
+        
+        success, response = self.run_test(
+            "C++ Vector No Reserve", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("high") >= 1 and
+                any(f.get("rule") == "vector_no_reserve" and f.get("severity") == "high"
+                    for f in findings)):
+                
+                self.log("   ✅ Vector no reserve correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Vector no reserve not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_map_over_unordered(self):
+        """Test std::map usage (medium severity)"""
+        code_with_issue = "std::map<int, std::string> lookup_table;"
+        
+        success, response = self.run_test(
+            "C++ Map Over Unordered", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "map_over_unordered_map" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ Map over unordered_map correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Map over unordered_map not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_heap_alloc_in_loop(self):
+        """Test heap allocation in loop (high severity)"""
+        code_with_issue = """void allocate_in_loop() {
+    for (int i = 0; i < 100; ++i) {
+        auto ptr = std::make_shared<int>(i);
+    }
+}"""
+        
+        success, response = self.run_test(
+            "C++ Heap Alloc In Loop", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("high") >= 1 and
+                any(f.get("rule") == "heap_alloc_in_loop" and f.get("severity") == "high"
+                    for f in findings)):
+                
+                self.log("   ✅ Heap allocation in loop correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Heap allocation in loop not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_unnecessary_copy(self):
+        """Test unnecessary container copy (medium severity)"""
+        code_with_issue = """void copy_container() {
+    std::vector<int> original = {1, 2, 3};
+    std::vector<int> copy = original;
+}"""
+        
+        success, response = self.run_test(
+            "C++ Unnecessary Copy", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "unnecessary_copy" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ Unnecessary copy correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Unnecessary copy not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_large_stack_alloc(self):
+        """Test large stack allocation (medium severity)"""
+        code_with_issue = "char buffer[8192];"
+        
+        success, response = self.run_test(
+            "C++ Large Stack Alloc", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "large_stack_alloc" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ Large stack allocation correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Large stack allocation not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_mutex_in_loop(self):
+        """Test mutex in tight loop (high severity)"""
+        code_with_issue = """void lock_in_loop() {
+    for (int i = 0; i < 1000; ++i) {
+        std::lock_guard<std::mutex> lock(mtx);
+        data[i] = i;
+    }
+}"""
+        
+        success, response = self.run_test(
+            "C++ Mutex In Loop", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("high") >= 1 and
+                any(f.get("rule") == "mutex_in_tight_loop" and f.get("severity") == "high"
+                    for f in findings)):
+                
+                self.log("   ✅ Mutex in tight loop correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Mutex in tight loop not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_string_concat_in_loop(self):
+        """Test string concatenation in loop (medium severity)"""
+        code_with_issue = """void concat_in_loop() {
+    std::string result;
+    for (int i = 0; i < 100; ++i) {
+        result += "data";
+    }
+}"""
+        
+        success, response = self.run_test(
+            "C++ String Concat In Loop", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "string_concat_in_loop" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ String concatenation in loop correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ String concatenation in loop not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_shared_ptr_overhead(self):
+        """Test shared_ptr overhead (low severity)"""
+        code_with_issue = "std::shared_ptr<int> ptr = std::make_shared<int>(42);"
+        
+        success, response = self.run_test(
+            "C++ Shared Ptr Overhead", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("low") >= 1 and
+                any(f.get("rule") == "shared_ptr_overhead" and f.get("severity") == "low"
+                    for f in findings)):
+                
+                self.log("   ✅ Shared_ptr overhead correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Shared_ptr overhead not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_exception_in_loop(self):
+        """Test try/catch in loop (medium severity)"""
+        code_with_issue = """void exception_in_loop() {
+    for (int i = 0; i < 100; ++i) {
+        try {
+            risky_operation(i);
+        } catch (...) {
+            handle_error();
+        }
+    }
+}"""
+        
+        success, response = self.run_test(
+            "C++ Exception In Loop", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "exception_in_loop" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ Exception in loop correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Exception in loop not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_virtual_dispatch(self):
+        """Test virtual function dispatch (low severity)"""
+        code_with_issue = "virtual void process() = 0;"
+        
+        success, response = self.run_test(
+            "C++ Virtual Dispatch", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("low") >= 1 and
+                any(f.get("rule") == "virtual_dispatch" and f.get("severity") == "low"
+                    for f in findings)):
+                
+                self.log("   ✅ Virtual dispatch correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Virtual dispatch not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_endl_flush(self):
+        """Test std::endl usage (low severity)"""
+        code_with_issue = 'std::cout << "Hello" << std::endl;'
+        
+        success, response = self.run_test(
+            "C++ Endl Flush", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("low") >= 1 and
+                any(f.get("rule") == "endl_flush" and f.get("severity") == "low"
+                    for f in findings)):
+                
+                self.log("   ✅ Endl flush correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Endl flush not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_inefficient_find(self):
+        """Test std::find usage (medium severity)"""
+        code_with_issue = "auto it = std::find(container.begin(), container.end(), value);"
+        
+        success, response = self.run_test(
+            "C++ Inefficient Find", "POST", "analyze-cpp", 200,
+            {"code": code_with_issue}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if (response.get("medium") >= 1 and
+                any(f.get("rule") == "inefficient_find" and f.get("severity") == "medium"
+                    for f in findings)):
+                
+                self.log("   ✅ Inefficient find correctly detected")
+                return True, response
+            else:
+                self.log(f"   ❌ Inefficient find not detected: {response}")
+        return False, {}
+
+    def test_cpp_analyzer_findings_structure(self):
+        """Test that findings have all required fields and are sorted by line"""
+        code_with_multiple_issues = """std::string process(std::string data) {  // line 1: pass_by_value
+    std::map<int, int> lookup;              // line 2: map_over_unordered_map
+    std::shared_ptr<int> ptr;               // line 3: shared_ptr_overhead
+    return data;
+}"""
+        
+        success, response = self.run_test(
+            "C++ Findings Structure", "POST", "analyze-cpp", 200,
+            {"code": code_with_multiple_issues}
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            if len(findings) >= 3:
+                # Check all findings have required fields
+                required_fields = ["line", "severity", "rule", "explanation", "suggestion", "snippet"]
+                all_have_fields = all(
+                    all(field in finding for field in required_fields)
+                    for finding in findings
+                )
+                
+                # Check findings are sorted by line number
+                lines = [f.get("line", 0) for f in findings]
+                is_sorted = lines == sorted(lines)
+                
+                if all_have_fields and is_sorted:
+                    self.log("   ✅ Findings have all required fields and are sorted by line")
+                    self.log(f"   Found {len(findings)} issues on lines: {lines}")
+                    return True, response
+                else:
+                    self.log(f"   ❌ Missing fields or not sorted. Fields check: {all_have_fields}, Sorted: {is_sorted}")
+            else:
+                self.log(f"   ❌ Expected at least 3 findings, got {len(findings)}")
+        return False, {}
+
 def main():
     print("=" * 60)
     print("🚀 PR Review Bot API Testing")
@@ -569,9 +949,27 @@ def main():
         ("Parse Diff - Multi File", tester.test_parse_diff_multi_file),
         ("Parse Diff - Line Numbers", tester.test_parse_diff_line_numbers),
         
+        # C++ Analyzer Tests (require authentication)
+        ("C++ Analyzer - Clean Code", tester.test_cpp_analyzer_clean_code),
+        ("C++ Analyzer - Pass By Value", tester.test_cpp_analyzer_pass_by_value),
+        ("C++ Analyzer - Vector No Reserve", tester.test_cpp_analyzer_vector_no_reserve),
+        ("C++ Analyzer - Map Over Unordered", tester.test_cpp_analyzer_map_over_unordered),
+        ("C++ Analyzer - Heap Alloc In Loop", tester.test_cpp_analyzer_heap_alloc_in_loop),
+        ("C++ Analyzer - Unnecessary Copy", tester.test_cpp_analyzer_unnecessary_copy),
+        ("C++ Analyzer - Large Stack Alloc", tester.test_cpp_analyzer_large_stack_alloc),
+        ("C++ Analyzer - Mutex In Loop", tester.test_cpp_analyzer_mutex_in_loop),
+        ("C++ Analyzer - String Concat In Loop", tester.test_cpp_analyzer_string_concat_in_loop),
+        ("C++ Analyzer - Shared Ptr Overhead", tester.test_cpp_analyzer_shared_ptr_overhead),
+        ("C++ Analyzer - Exception In Loop", tester.test_cpp_analyzer_exception_in_loop),
+        ("C++ Analyzer - Virtual Dispatch", tester.test_cpp_analyzer_virtual_dispatch),
+        ("C++ Analyzer - Endl Flush", tester.test_cpp_analyzer_endl_flush),
+        ("C++ Analyzer - Inefficient Find", tester.test_cpp_analyzer_inefficient_find),
+        ("C++ Analyzer - Findings Structure", tester.test_cpp_analyzer_findings_structure),
+        
         ("Logout", tester.test_auth_logout),
         ("Unauthorized Access", tester.test_invalid_auth),
         ("Parse Diff Unauthorized", tester.test_parse_diff_unauthorized),
+        ("C++ Analyzer Unauthorized", tester.test_cpp_analyzer_unauthorized),
     ]
     
     for test_name, test_func in tests:
