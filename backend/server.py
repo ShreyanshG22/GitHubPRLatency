@@ -23,6 +23,7 @@ from models import (
 from github_client import validate_webhook_signature, fetch_pr_diff
 from analyzer import analyze_diff
 from comment_bot import post_review_comment
+from diff_parser import parse_diff
 
 # ─── Config ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -281,8 +282,15 @@ async def process_pull_request(payload: dict, delivery_id: str):
         # Fetch diff
         diff = await fetch_pr_diff(repo_full_name, pr_number)
 
-        # Analyze
-        result = await analyze_diff(diff, pr_title, pr_author)
+        # Parse diff into structured code blocks
+        parsed = parse_diff(diff)
+        logger.info(
+            f"Parsed {repo_full_name}#{pr_number}: "
+            f"{parsed.file_count} files, {parsed.total_blocks} blocks"
+        )
+
+        # Analyze with structured blocks
+        result = await analyze_diff(diff, pr_title, pr_author, parsed=parsed)
 
         # Update analysis
         update_data = {
@@ -418,6 +426,42 @@ async def root():
     return {"message": "PR Review Bot API", "version": "1.0.0"}
 
 
+# ─── Diff Parser Test Endpoint ────────────────────────────────────────
+from pydantic import BaseModel as _BM
+
+class DiffParseRequest(_BM):
+    diff_text: str
+
+@api_router.post("/parse-diff")
+async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
+    """Parse a raw unified diff and return structured code blocks."""
+    await get_current_user(request)
+    parsed = parse_diff(body.diff_text)
+    return {
+        "file_count": parsed.file_count,
+        "total_blocks": parsed.total_blocks,
+        "files": [
+            {
+                "path": f.path,
+                "language": f.language.value,
+                "added_lines": f.total_added_lines,
+                "modified_lines": f.total_modified_lines,
+                "blocks": [
+                    {
+                        "start_line": b.start_line,
+                        "end_line": b.end_line,
+                        "change_type": b.change_type.value,
+                        "line_count": b.line_count,
+                        "text": b.text,
+                    }
+                    for b in f.blocks
+                ],
+            }
+            for f in parsed.files
+        ],
+    }
+
+
 # ─── Include Router & Middleware ──────────────────────────────────────
 app.include_router(api_router)
 
@@ -464,17 +508,17 @@ async def startup():
     # Write test credentials
     os.makedirs("/app/memory", exist_ok=True)
     with open("/app/memory/test_credentials.md", "w") as f:
-        f.write(f"# Test Credentials\n\n")
+        f.write("# Test Credentials\n\n")
         f.write(f"## Admin\n- Email: {admin_email}\n- Password: {admin_password}\n- Role: admin\n\n")
-        f.write(f"## Auth Endpoints\n")
-        f.write(f"- POST /api/auth/register\n- POST /api/auth/login\n")
-        f.write(f"- POST /api/auth/logout\n- GET /api/auth/me\n")
-        f.write(f"- POST /api/auth/refresh\n- POST /api/auth/forgot-password\n")
-        f.write(f"- POST /api/auth/reset-password\n\n")
-        f.write(f"## Webhook Endpoint\n- POST /api/github-webhook\n\n")
-        f.write(f"## Dashboard Endpoints (auth required)\n")
-        f.write(f"- GET /api/webhook-logs\n- GET /api/reviews\n")
-        f.write(f"- GET /api/reviews/{{review_id}}\n- GET /api/stats\n")
+        f.write("## Auth Endpoints\n")
+        f.write("- POST /api/auth/register\n- POST /api/auth/login\n")
+        f.write("- POST /api/auth/logout\n- GET /api/auth/me\n")
+        f.write("- POST /api/auth/refresh\n- POST /api/auth/forgot-password\n")
+        f.write("- POST /api/auth/reset-password\n\n")
+        f.write("## Webhook Endpoint\n- POST /api/github-webhook\n\n")
+        f.write("## Dashboard Endpoints (auth required)\n")
+        f.write("- GET /api/webhook-logs\n- GET /api/reviews\n")
+        f.write("- GET /api/reviews/{review_id}\n- GET /api/stats\n")
 
     logger.info("PR Review Bot API started")
 

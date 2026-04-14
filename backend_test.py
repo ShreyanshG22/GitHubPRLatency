@@ -254,6 +254,295 @@ class PRReviewBotTester:
         )
         return success
 
+    def test_parse_diff_unauthorized(self):
+        """Test parse-diff endpoint without authentication"""
+        # Clear session cookies
+        self.session.cookies.clear()
+        
+        test_diff = """diff --git a/test.py b/test.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/test.py
+@@ -0,0 +1,3 @@
++def hello():
++    print("Hello World")
++    return True"""
+        
+        success, response = self.run_test(
+            "Parse Diff Unauthorized", "POST", "parse-diff", 401, 
+            {"diff_text": test_diff}
+        )
+        return success
+
+    def test_parse_diff_empty(self):
+        """Test parse-diff with empty diff"""
+        success, response = self.run_test(
+            "Parse Empty Diff", "POST", "parse-diff", 200,
+            {"diff_text": ""}
+        )
+        
+        if success:
+            expected = {"file_count": 0, "total_blocks": 0, "files": []}
+            if (response.get("file_count") == 0 and 
+                response.get("total_blocks") == 0 and 
+                response.get("files") == []):
+                self.log("   ✅ Empty diff correctly parsed")
+                return True, response
+            else:
+                self.log(f"   ❌ Unexpected response: {response}")
+        return False, {}
+
+    def test_parse_diff_python_file(self):
+        """Test parse-diff with Python file"""
+        python_diff = """diff --git a/calculator.py b/calculator.py
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/calculator.py
+@@ -0,0 +1,8 @@
++def add(a, b):
++    return a + b
++
++def multiply(a, b):
++    result = a * b
++    return result
++
++print("Calculator module loaded")"""
+        
+        success, response = self.run_test(
+            "Parse Python Diff", "POST", "parse-diff", 200,
+            {"diff_text": python_diff}
+        )
+        
+        if success:
+            # Validate response structure
+            if (response.get("file_count") == 1 and 
+                response.get("total_blocks") == 1 and
+                len(response.get("files", [])) == 1):
+                
+                file_data = response["files"][0]
+                if (file_data.get("path") == "calculator.py" and
+                    file_data.get("language") == "python" and
+                    len(file_data.get("blocks", [])) == 1):
+                    
+                    block = file_data["blocks"][0]
+                    if (block.get("change_type") == "added" and
+                        block.get("start_line") == 1 and
+                        block.get("end_line") == 8 and
+                        block.get("line_count") == 8):
+                        
+                        self.log("   ✅ Python file correctly parsed")
+                        self.log(f"   Language: {file_data['language']}")
+                        self.log(f"   Lines: {block['start_line']}-{block['end_line']}")
+                        return True, response
+            
+            self.log(f"   ❌ Unexpected response structure: {response}")
+        return False, {}
+
+    def test_parse_diff_cpp_file(self):
+        """Test parse-diff with C++ file"""
+        cpp_diff = """diff --git a/math_utils.hpp b/math_utils.hpp
+new file mode 100644
+index 0000000..abcdef1
+--- /dev/null
++++ b/math_utils.hpp
+@@ -0,0 +1,6 @@
++#ifndef MATH_UTILS_HPP
++#define MATH_UTILS_HPP
++
++int factorial(int n);
++
++#endif"""
+        
+        success, response = self.run_test(
+            "Parse C++ Header Diff", "POST", "parse-diff", 200,
+            {"diff_text": cpp_diff}
+        )
+        
+        if success:
+            if (response.get("file_count") == 1 and 
+                len(response.get("files", [])) == 1):
+                
+                file_data = response["files"][0]
+                if (file_data.get("path") == "math_utils.hpp" and
+                    file_data.get("language") == "cpp"):
+                    
+                    self.log("   ✅ C++ header file correctly parsed")
+                    self.log(f"   Language: {file_data['language']}")
+                    return True, response
+            
+            self.log(f"   ❌ Unexpected response: {response}")
+        return False, {}
+
+    def test_parse_diff_unknown_file(self):
+        """Test parse-diff with unknown file type"""
+        unknown_diff = """diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..xyz789
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,3 @@
++# Project Title
++
++This is a test project."""
+        
+        success, response = self.run_test(
+            "Parse Unknown File Diff", "POST", "parse-diff", 200,
+            {"diff_text": unknown_diff}
+        )
+        
+        if success:
+            if (response.get("file_count") == 1 and 
+                len(response.get("files", [])) == 1):
+                
+                file_data = response["files"][0]
+                if (file_data.get("path") == "README.md" and
+                    file_data.get("language") == "unknown"):
+                    
+                    self.log("   ✅ Unknown file type correctly detected")
+                    self.log(f"   Language: {file_data['language']}")
+                    return True, response
+            
+            self.log(f"   ❌ Unexpected response: {response}")
+        return False, {}
+
+    def test_parse_diff_modified_lines(self):
+        """Test parse-diff with modified lines (additions near removals)"""
+        modified_diff = """diff --git a/config.py b/config.py
+index 1234567..abcdefg 100644
+--- a/config.py
++++ b/config.py
+@@ -1,5 +1,6 @@
+ import os
+ 
+-DEBUG = False
++DEBUG = True
++VERBOSE = True
+ 
+ DATABASE_URL = os.environ.get('DB_URL')"""
+        
+        success, response = self.run_test(
+            "Parse Modified Lines Diff", "POST", "parse-diff", 200,
+            {"diff_text": modified_diff}
+        )
+        
+        if success:
+            if (response.get("file_count") == 1 and 
+                len(response.get("files", [])) == 1):
+                
+                file_data = response["files"][0]
+                if (file_data.get("path") == "config.py" and
+                    file_data.get("language") == "python" and
+                    len(file_data.get("blocks", [])) == 1):
+                    
+                    block = file_data["blocks"][0]
+                    if block.get("change_type") == "modified":
+                        self.log("   ✅ Modified lines correctly detected")
+                        self.log(f"   Change type: {block['change_type']}")
+                        return True, response
+            
+            self.log(f"   ❌ Unexpected response: {response}")
+        return False, {}
+
+    def test_parse_diff_multi_file(self):
+        """Test parse-diff with multiple files"""
+        multi_diff = """diff --git a/main.py b/main.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,2 @@
++def main():
++    pass
+diff --git a/utils.cpp b/utils.cpp
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/utils.cpp
+@@ -0,0 +1,3 @@
++#include <iostream>
++
++void hello() {}
+diff --git a/config.json b/config.json
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/config.json
+@@ -0,0 +1,3 @@
++{
++  "version": "1.0"
++}"""
+        
+        success, response = self.run_test(
+            "Parse Multi-File Diff", "POST", "parse-diff", 200,
+            {"diff_text": multi_diff}
+        )
+        
+        if success:
+            if (response.get("file_count") == 3 and 
+                response.get("total_blocks") == 3 and
+                len(response.get("files", [])) == 3):
+                
+                files = response["files"]
+                languages = [f.get("language") for f in files]
+                paths = [f.get("path") for f in files]
+                
+                expected_langs = ["python", "cpp", "unknown"]
+                expected_paths = ["main.py", "utils.cpp", "config.json"]
+                
+                if (set(languages) == set(expected_langs) and 
+                    set(paths) == set(expected_paths)):
+                    
+                    self.log("   ✅ Multi-file diff correctly parsed")
+                    self.log(f"   Files: {len(files)}, Blocks: {response['total_blocks']}")
+                    self.log(f"   Languages detected: {languages}")
+                    return True, response
+            
+            self.log(f"   ❌ Unexpected response: {response}")
+        return False, {}
+
+    def test_parse_diff_line_numbers(self):
+        """Test parse-diff line number accuracy"""
+        line_diff = """diff --git a/test.py b/test.py
+index 1234567..abcdefg 100644
+--- a/test.py
++++ b/test.py
+@@ -10,6 +10,8 @@ def existing_function():
+     return "existing"
+ 
+ def new_function():
++    # This is a new comment
++    value = 42
+     return "new"
+ 
+ # End of file"""
+        
+        success, response = self.run_test(
+            "Parse Line Numbers Diff", "POST", "parse-diff", 200,
+            {"diff_text": line_diff}
+        )
+        
+        if success:
+            if (response.get("file_count") == 1 and 
+                len(response.get("files", [])) == 1):
+                
+                file_data = response["files"][0]
+                if len(file_data.get("blocks", [])) == 1:
+                    block = file_data["blocks"][0]
+                    # The hunk starts at line 10, and we have 2 added lines
+                    # They should be at lines 13-14 based on the context
+                    if (block.get("start_line") == 13 and
+                        block.get("end_line") == 14 and
+                        block.get("line_count") == 2):
+                        
+                        self.log("   ✅ Line numbers correctly calculated")
+                        self.log(f"   Lines: {block['start_line']}-{block['end_line']}")
+                        return True, response
+            
+            self.log(f"   ❌ Unexpected line numbers: {response}")
+        return False, {}
+
 def main():
     print("=" * 60)
     print("🚀 PR Review Bot API Testing")
@@ -270,8 +559,19 @@ def main():
         ("GitHub Webhook Ping", tester.test_webhook_ping),
         ("GitHub Webhook PR", tester.test_webhook_pull_request),
         ("Dashboard Endpoints", tester.test_dashboard_endpoints),
+        
+        # Diff Parser Tests (require authentication)
+        ("Parse Diff - Empty", tester.test_parse_diff_empty),
+        ("Parse Diff - Python File", tester.test_parse_diff_python_file),
+        ("Parse Diff - C++ File", tester.test_parse_diff_cpp_file),
+        ("Parse Diff - Unknown File", tester.test_parse_diff_unknown_file),
+        ("Parse Diff - Modified Lines", tester.test_parse_diff_modified_lines),
+        ("Parse Diff - Multi File", tester.test_parse_diff_multi_file),
+        ("Parse Diff - Line Numbers", tester.test_parse_diff_line_numbers),
+        
         ("Logout", tester.test_auth_logout),
         ("Unauthorized Access", tester.test_invalid_auth),
+        ("Parse Diff Unauthorized", tester.test_parse_diff_unauthorized),
     ]
     
     for test_name, test_func in tests:
