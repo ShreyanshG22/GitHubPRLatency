@@ -68,3 +68,14 @@ Create a FastAPI backend for a GitHub App that reviews pull requests with webhoo
 - Integrated into webhook processing pipeline (parse_diff → format_blocks_for_analysis → LLM)
 - Added POST /api/parse-diff endpoint for direct testing
 - 19/19 backend tests passed
+
+## Iteration 3 — C++ Static Performance Analyzer (April 2026)
+- Created `/app/backend/cpp_analyzer.py` with 14 pattern-matching rules
+- Rules: pass_by_value, vector_no_reserve, map_over_unordered_map, heap_alloc_in_loop,
+  unnecessary_copy, large_stack_alloc, mutex_in_tight_loop, string_concat_in_loop,
+  shared_ptr_overhead, exception_in_loop, virtual_dispatch, endl_flush,
+  inefficient_find, move_on_return
+- Added POST /api/analyze-cpp endpoint
+- Integrated into webhook pipeline: C++ files get static analysis merged with LLM review
+- Fixed _is_inside_loop heuristic to handle nested non-loop scopes (try/if inside for)
+- 33/33 backend tests passed
