@@ -89,3 +89,28 @@ Create a FastAPI backend for a GitHub App that reviews pull requests with webhoo
 - Handles 3 input formats: static findings (rule/explanation/suggestion), LLM body-only, merged bracket format
 - Added POST /api/preview-comment endpoint for formatting preview
 - All tests passed
+
+## Iteration 5 — P1 Features Complete (April 2026)
+
+### 1. Rate Limiting
+- MongoDB `rate_limits` collection with TTL auto-expiry (2 min)
+- Per-repo RPM configurable via repo_settings (default: 30/min)
+- Returns 429 when exceeded
+
+### 2. Webhook Retry Deduplication
+- Checks `delivery_id` against existing `webhook_logs` before processing
+- Duplicate deliveries return 200 with `{duplicate: true}`, skip background task
+
+### 3. Custom Analysis Rules/Configuration
+- `rule_config` field in repo_settings: `{enabled_rules, disabled_rules, severity_overrides}`
+- `cpp_analyzer.py` updated with config-aware `_resolve_rules()` + severity override support
+- `/api/analyze-cpp` endpoint also accepts optional `config` parameter
+- `GET /api/available-rules` returns all 14 rule names
+
+### 4. Multi-Repo Settings
+- MongoDB `repo_settings` collection with full CRUD
+- Fields: repo_full_name, enabled, auto_post_comments, rate_limit_rpm, severity_threshold, rule_config
+- Unconfigured repos get sensible defaults (enabled, all rules, no threshold)
+- Pipeline respects: enabled flag, auto_post, severity_threshold, rule_config
+
+### P1 Status: ALL COMPLETE
