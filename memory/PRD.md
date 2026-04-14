@@ -60,3 +60,11 @@ Create a FastAPI backend for a GitHub App that reviews pull requests with webhoo
 - [ ] Email notifications for critical findings
 - [ ] Team management (multiple users)
 - [ ] Webhook delivery replay
+
+## Iteration 2 — Diff Parser Module (April 2026)
+- Created `/app/backend/diff_parser.py` with modular functions
+- Language detection: Python (.py, .pyw, .pyi) and C++ (.cpp, .cc, .cxx, .c, .hpp, .hxx, .h)
+- Change classification: `added` (new code) vs `modified` (changed existing code)
+- Integrated into webhook processing pipeline (parse_diff → format_blocks_for_analysis → LLM)
+- Added POST /api/parse-diff endpoint for direct testing
+- 19/19 backend tests passed
