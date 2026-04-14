@@ -34,6 +34,8 @@ class PRReviewBotTester:
                 response = self.session.get(url)
             elif method == 'POST':
                 response = self.session.post(url, json=data)
+            elif method == 'PUT':
+                response = self.session.put(url, json=data)
             elif method == 'DELETE':
                 response = self.session.delete(url)
 
@@ -1278,6 +1280,526 @@ void process(std::vector<int> data) {
                 
         return success, preview_response
 
+    # ─── P1 Feature Tests ────────────────────────────────────────────────
+
+    def test_webhook_deduplication(self):
+        """Test webhook deduplication using same X-GitHub-Delivery header"""
+        delivery_id = f"test-dedup-{int(time.time())}"
+        
+        ping_payload = {
+            "zen": "Deduplication test",
+            "hook_id": 12345,
+            "repository": {
+                "id": 35129377,
+                "name": "test-repo",
+                "full_name": "testuser/test-repo",
+                "owner": {"login": "testuser", "id": 123}
+            }
+        }
+        
+        headers = {
+            'X-GitHub-Event': 'ping',
+            'X-GitHub-Delivery': delivery_id,
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{self.base_url}/api/github-webhook"
+        
+        # First request should succeed
+        self.tests_run += 1
+        self.log(f"🔍 Testing Webhook Deduplication - First Request...")
+        
+        try:
+            response1 = requests.post(url, json=ping_payload, headers=headers)
+            if response1.status_code == 200:
+                self.tests_passed += 1
+                self.log("   ✅ First request succeeded")
+                
+                # Second request with same delivery_id should return duplicate
+                self.tests_run += 1
+                self.log(f"🔍 Testing Webhook Deduplication - Second Request...")
+                
+                response2 = requests.post(url, json=ping_payload, headers=headers)
+                if response2.status_code == 200:
+                    try:
+                        resp_data = response2.json()
+                        if resp_data.get('duplicate') is True:
+                            self.tests_passed += 1
+                            self.log("   ✅ Second request correctly returned duplicate: true")
+                            return True, resp_data
+                        else:
+                            self.log(f"   ❌ Expected duplicate: true, got: {resp_data}")
+                    except:
+                        self.log("   ❌ Failed to parse response JSON")
+                else:
+                    self.log(f"   ❌ Second request failed with status {response2.status_code}")
+            else:
+                self.log(f"   ❌ First request failed with status {response1.status_code}")
+                
+        except Exception as e:
+            self.log(f"   ❌ Error: {str(e)}")
+            
+        return False, {}
+
+    def test_webhook_rate_limiting(self):
+        """Test webhook rate limiting by sending rapid requests"""
+        repo_name = f"testuser/rate-limit-test-{int(time.time())}"
+        
+        ping_payload = {
+            "zen": "Rate limit test",
+            "hook_id": 12345,
+            "repository": {
+                "id": 35129377,
+                "name": "rate-limit-test",
+                "full_name": repo_name,
+                "owner": {"login": "testuser", "id": 123}
+            }
+        }
+        
+        url = f"{self.base_url}/api/github-webhook"
+        
+        self.tests_run += 1
+        self.log(f"🔍 Testing Webhook Rate Limiting...")
+        
+        try:
+            # Send many rapid requests (default limit is 30 per minute)
+            rate_limited = False
+            for i in range(35):  # Send more than the limit
+                headers = {
+                    'X-GitHub-Event': 'ping',
+                    'X-GitHub-Delivery': f'rate-test-{i}-{int(time.time())}',
+                    'Content-Type': 'application/json'
+                }
+                
+                response = requests.post(url, json=ping_payload, headers=headers)
+                
+                if response.status_code == 429:
+                    rate_limited = True
+                    self.tests_passed += 1
+                    self.log(f"   ✅ Rate limit triggered after {i+1} requests (429 status)")
+                    return True, {"rate_limited_after": i+1}
+                elif response.status_code != 200:
+                    self.log(f"   ❌ Unexpected status {response.status_code} on request {i+1}")
+                    return False, {}
+                    
+                # Small delay to avoid overwhelming the server
+                time.sleep(0.1)
+            
+            if not rate_limited:
+                self.log("   ❌ Rate limit not triggered after 35 requests")
+                return False, {}
+                
+        except Exception as e:
+            self.log(f"   ❌ Error: {str(e)}")
+            return False, {}
+
+    def test_repo_settings_disabled_analysis(self):
+        """Test webhook with repo settings enabled=false"""
+        # First create a repo setting with enabled=false
+        repo_name = f"testuser/disabled-repo-{int(time.time())}"
+        
+        # Create repo settings with enabled=false
+        success, _ = self.run_test(
+            "Create Disabled Repo Settings",
+            "POST",
+            "repo-settings",
+            200,
+            {
+                "repo_full_name": repo_name,
+                "enabled": False,
+                "auto_post_comments": True,
+                "rate_limit_rpm": 30
+            }
+        )
+        
+        if not success:
+            return False, {}
+        
+        # Now send webhook for this repo
+        pr_payload = {
+            "action": "opened",
+            "number": 1,
+            "pull_request": {
+                "id": 1,
+                "number": 1,
+                "title": "Test PR for disabled repo",
+                "user": {"login": "testuser", "id": 123},
+                "head": {"sha": "abc123def456"},
+                "html_url": f"https://github.com/{repo_name}/pull/1"
+            },
+            "repository": {
+                "id": 35129377,
+                "name": repo_name.split('/')[1],
+                "full_name": repo_name,
+                "owner": {"login": "testuser", "id": 123}
+            }
+        }
+        
+        headers = {
+            'X-GitHub-Event': 'pull_request',
+            'X-GitHub-Delivery': f'disabled-test-{int(time.time())}',
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{self.base_url}/api/github-webhook"
+        
+        self.tests_run += 1
+        self.log(f"🔍 Testing Disabled Repo Analysis...")
+        
+        try:
+            response = requests.post(url, json=pr_payload, headers=headers)
+            if response.status_code == 200:
+                try:
+                    resp_data = response.json()
+                    if "Analysis disabled" in resp_data.get('message', ''):
+                        self.tests_passed += 1
+                        self.log("   ✅ Disabled repo correctly returned 'Analysis disabled' message")
+                        return True, resp_data
+                    else:
+                        self.log(f"   ❌ Expected 'Analysis disabled' message, got: {resp_data}")
+                except:
+                    self.log("   ❌ Failed to parse response JSON")
+            else:
+                self.log(f"   ❌ Expected 200, got {response.status_code}")
+                
+        except Exception as e:
+            self.log(f"   ❌ Error: {str(e)}")
+            
+        return False, {}
+
+    def test_available_rules(self):
+        """Test GET /api/available-rules returns all 14 C++ rule names"""
+        success, response = self.run_test(
+            "Available Rules", "GET", "available-rules", 200
+        )
+        
+        if success:
+            rules = response.get("rules", [])
+            expected_rules = [
+                "pass_by_value", "vector_no_reserve", "map_over_unordered_map",
+                "heap_alloc_in_loop", "unnecessary_copy", "large_stack_alloc",
+                "mutex_in_tight_loop", "string_concat_in_loop", "shared_ptr_overhead",
+                "exception_in_loop", "virtual_dispatch", "endl_flush",
+                "inefficient_find", "move_on_return"
+            ]
+            
+            if len(rules) == 14 and all(rule in rules for rule in expected_rules):
+                self.log(f"   ✅ All 14 C++ rules returned: {len(rules)} rules")
+                return True, response
+            else:
+                self.log(f"   ❌ Expected 14 rules, got {len(rules)}: {rules}")
+                missing = [r for r in expected_rules if r not in rules]
+                if missing:
+                    self.log(f"   Missing rules: {missing}")
+        
+        return False, {}
+
+    def test_repo_settings_crud(self):
+        """Test full CRUD operations on repo settings"""
+        repo_name = f"testorg/crud-test-{int(time.time())}"
+        
+        # CREATE - POST /api/repo-settings
+        create_data = {
+            "repo_full_name": repo_name,
+            "enabled": True,
+            "auto_post_comments": False,
+            "rate_limit_rpm": 60,
+            "severity_threshold": "medium",
+            "rule_config": {
+                "disabled_rules": ["endl_flush"],
+                "severity_overrides": {"shared_ptr_overhead": "high"}
+            }
+        }
+        
+        success, create_response = self.run_test(
+            "Create Repo Settings", "POST", "repo-settings", 200, create_data
+        )
+        
+        if not success:
+            return False, {}
+        
+        # Verify created data
+        if (create_response.get("repo_full_name") == repo_name and
+            create_response.get("enabled") is True and
+            create_response.get("auto_post_comments") is False and
+            create_response.get("rate_limit_rpm") == 60):
+            self.log("   ✅ Repo settings created with correct data")
+        else:
+            self.log(f"   ❌ Created data mismatch: {create_response}")
+            return False, {}
+        
+        # READ - GET /api/repo-settings (list all)
+        success, list_response = self.run_test(
+            "List Repo Settings", "GET", "repo-settings", 200
+        )
+        
+        if success:
+            found_repo = any(r.get("repo_full_name") == repo_name for r in list_response)
+            if found_repo:
+                self.log("   ✅ Created repo found in list")
+            else:
+                self.log("   ❌ Created repo not found in list")
+                return False, {}
+        else:
+            return False, {}
+        
+        # READ - GET /api/repo-settings/{owner}/{name} (specific repo)
+        owner, name = repo_name.split('/')
+        success, get_response = self.run_test(
+            "Get Specific Repo Settings", "GET", f"repo-settings/{owner}/{name}", 200
+        )
+        
+        if success:
+            if (get_response.get("repo_full_name") == repo_name and
+                get_response.get("severity_threshold") == "medium" and
+                get_response.get("rule_config", {}).get("disabled_rules") == ["endl_flush"]):
+                self.log("   ✅ Specific repo settings retrieved correctly")
+            else:
+                self.log(f"   ❌ Retrieved data mismatch: {get_response}")
+                return False, {}
+        else:
+            return False, {}
+        
+        # UPDATE - PUT /api/repo-settings/{owner}/{name} (partial update)
+        update_data = {
+            "enabled": False,
+            "rate_limit_rpm": 120
+        }
+        
+        success, update_response = self.run_test(
+            "Update Repo Settings", "PUT", f"repo-settings/{owner}/{name}", 200, update_data
+        )
+        
+        if success:
+            if (update_response.get("enabled") is False and
+                update_response.get("rate_limit_rpm") == 120 and
+                update_response.get("auto_post_comments") is False):  # Should preserve old value
+                self.log("   ✅ Repo settings updated correctly (partial update)")
+            else:
+                self.log(f"   ❌ Updated data mismatch: {update_response}")
+                return False, {}
+        else:
+            return False, {}
+        
+        # DELETE - DELETE /api/repo-settings/{owner}/{name}
+        success, delete_response = self.run_test(
+            "Delete Repo Settings", "DELETE", f"repo-settings/{owner}/{name}", 200
+        )
+        
+        if success:
+            if "deleted" in delete_response.get("message", "").lower():
+                self.log("   ✅ Repo settings deleted successfully")
+            else:
+                self.log(f"   ❌ Unexpected delete response: {delete_response}")
+                return False, {}
+        else:
+            return False, {}
+        
+        # Verify deletion - GET should return defaults with is_default=true
+        success, default_response = self.run_test(
+            "Get Deleted Repo (Should Return Defaults)", "GET", f"repo-settings/{owner}/{name}", 200
+        )
+        
+        if success:
+            if (default_response.get("is_default") is True and
+                default_response.get("enabled") is True and  # Default values
+                default_response.get("rate_limit_rpm") == 30):
+                self.log("   ✅ Deleted repo returns defaults with is_default=true")
+            else:
+                self.log(f"   ❌ Expected defaults, got: {default_response}")
+                return False, {}
+        else:
+            return False, {}
+        
+        return True, {"crud_operations": "all_passed"}
+
+    def test_repo_settings_edge_cases(self):
+        """Test repo settings edge cases"""
+        repo_name = f"testorg/edge-case-{int(time.time())}"
+        
+        # Test creating duplicate repo settings (should return 409)
+        create_data = {
+            "repo_full_name": repo_name,
+            "enabled": True
+        }
+        
+        # First creation should succeed
+        success, _ = self.run_test(
+            "Create Repo Settings (First)", "POST", "repo-settings", 200, create_data
+        )
+        
+        if not success:
+            return False, {}
+        
+        # Second creation should fail with 409
+        success, _ = self.run_test(
+            "Create Duplicate Repo Settings", "POST", "repo-settings", 409, create_data
+        )
+        
+        if not success:
+            self.log("   ❌ Duplicate creation should return 409")
+            return False, {}
+        else:
+            self.log("   ✅ Duplicate creation correctly returned 409")
+        
+        # Test deleting non-existent repo (should return 404)
+        fake_repo = f"fake/nonexistent-{int(time.time())}"
+        owner, name = fake_repo.split('/')
+        
+        success, _ = self.run_test(
+            "Delete Non-existent Repo", "DELETE", f"repo-settings/{owner}/{name}", 404
+        )
+        
+        if not success:
+            self.log("   ❌ Deleting non-existent repo should return 404")
+            return False, {}
+        else:
+            self.log("   ✅ Deleting non-existent repo correctly returned 404")
+        
+        return True, {}
+
+    def test_repo_settings_auth_required(self):
+        """Test that all repo settings endpoints require authentication"""
+        # Clear session cookies
+        temp_session = requests.Session()
+        temp_session.headers.update({'Content-Type': 'application/json'})
+        
+        endpoints = [
+            ("GET", "available-rules"),
+            ("GET", "repo-settings"),
+            ("GET", "repo-settings/test/repo"),
+            ("POST", "repo-settings"),
+            ("PUT", "repo-settings/test/repo"),
+            ("DELETE", "repo-settings/test/repo")
+        ]
+        
+        all_passed = True
+        for method, endpoint in endpoints:
+            url = f"{self.base_url}/api/{endpoint}"
+            
+            self.tests_run += 1
+            self.log(f"🔍 Testing {method} {endpoint} - Auth Required...")
+            
+            try:
+                if method == "GET":
+                    response = temp_session.get(url)
+                elif method == "POST":
+                    response = temp_session.post(url, json={"repo_full_name": "test/repo"})
+                elif method == "PUT":
+                    response = temp_session.put(url, json={"enabled": True})
+                elif method == "DELETE":
+                    response = temp_session.delete(url)
+                
+                if response.status_code == 401:
+                    self.tests_passed += 1
+                    self.log(f"   ✅ {method} {endpoint} correctly returned 401")
+                else:
+                    self.log(f"   ❌ {method} {endpoint} expected 401, got {response.status_code}")
+                    all_passed = False
+                    
+            except Exception as e:
+                self.log(f"   ❌ {method} {endpoint} error: {str(e)}")
+                all_passed = False
+        
+        return all_passed, {}
+
+    def test_cpp_analyzer_custom_rules(self):
+        """Test C++ analyzer with custom rule configuration"""
+        # Test code that triggers multiple rules
+        test_code = """
+void process(std::vector<int> data) {  // pass_by_value
+    std::cout << "Processing" << std::endl;  // endl_flush
+    std::shared_ptr<int> ptr;  // shared_ptr_overhead
+}
+"""
+        
+        # Test 1: Disabled rules - should NOT produce endl_flush findings
+        config_disabled = {
+            "disabled_rules": ["endl_flush"]
+        }
+        
+        success, response = self.run_test(
+            "C++ Analyzer - Disabled Rules",
+            "POST",
+            "analyze-cpp",
+            200,
+            {
+                "code": test_code,
+                "file_path": "test.cpp",
+                "config": config_disabled
+            }
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            endl_findings = [f for f in findings if f.get("rule") == "endl_flush"]
+            if len(endl_findings) == 0:
+                self.log("   ✅ Disabled rules correctly excluded endl_flush findings")
+            else:
+                self.log(f"   ❌ Found {len(endl_findings)} endl_flush findings despite being disabled")
+                return False, {}
+        else:
+            return False, {}
+        
+        # Test 2: Enabled rules only - should ONLY produce pass_by_value findings
+        config_enabled = {
+            "enabled_rules": ["pass_by_value"]
+        }
+        
+        success, response = self.run_test(
+            "C++ Analyzer - Enabled Rules Only",
+            "POST",
+            "analyze-cpp",
+            200,
+            {
+                "code": test_code,
+                "file_path": "test.cpp",
+                "config": config_enabled
+            }
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            rule_names = [f.get("rule") for f in findings]
+            if all(rule == "pass_by_value" for rule in rule_names) and len(findings) > 0:
+                self.log(f"   ✅ Enabled rules only produced {len(findings)} pass_by_value findings")
+            else:
+                self.log(f"   ❌ Expected only pass_by_value findings, got: {rule_names}")
+                return False, {}
+        else:
+            return False, {}
+        
+        # Test 3: Severity overrides - should change shared_ptr_overhead to high
+        config_severity = {
+            "severity_overrides": {"shared_ptr_overhead": "high"}
+        }
+        
+        success, response = self.run_test(
+            "C++ Analyzer - Severity Overrides",
+            "POST",
+            "analyze-cpp",
+            200,
+            {
+                "code": test_code,
+                "file_path": "test.cpp",
+                "config": config_severity
+            }
+        )
+        
+        if success:
+            findings = response.get("findings", [])
+            shared_ptr_findings = [f for f in findings if f.get("rule") == "shared_ptr_overhead"]
+            if (len(shared_ptr_findings) > 0 and 
+                shared_ptr_findings[0].get("severity") == "high"):
+                self.log("   ✅ Severity override correctly changed shared_ptr_overhead to high")
+            else:
+                self.log(f"   ❌ Severity override failed. Findings: {shared_ptr_findings}")
+                return False, {}
+        else:
+            return False, {}
+        
+        return True, {"custom_rules_tests": "all_passed"}
+
 def main():
     print("=" * 60)
     print("🚀 PR Review Bot API Testing")
@@ -1331,6 +1853,16 @@ def main():
         ("Preview Comment - Merged Format", tester.test_preview_comment_merged_format),
         ("Preview Comment - Auth Required", tester.test_preview_comment_auth_required),
         ("C++ Integration Pipeline", tester.test_analyze_cpp_integration),
+        
+        # P1 Feature Tests (require authentication for some)
+        ("P1: Webhook Deduplication", tester.test_webhook_deduplication),
+        ("P1: Webhook Rate Limiting", tester.test_webhook_rate_limiting),
+        ("P1: Disabled Repo Analysis", tester.test_repo_settings_disabled_analysis),
+        ("P1: Available Rules", tester.test_available_rules),
+        ("P1: Repo Settings CRUD", tester.test_repo_settings_crud),
+        ("P1: Repo Settings Edge Cases", tester.test_repo_settings_edge_cases),
+        ("P1: Repo Settings Auth Required", tester.test_repo_settings_auth_required),
+        ("P1: C++ Custom Rules Config", tester.test_cpp_analyzer_custom_rules),
         
         ("Logout", tester.test_auth_logout),
         ("Unauthorized Access", tester.test_invalid_auth),

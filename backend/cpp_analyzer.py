@@ -479,35 +479,42 @@ def _rule_move_semantics(lines: List[str], offset: int) -> List[Finding]:
 
 # ─── Rule Registry ───────────────────────────────────────────────────
 
-ALL_RULES = [
-    _rule_pass_by_value,
-    _rule_vector_no_reserve,
-    _rule_map_over_unordered,
-    _rule_heap_alloc_in_loop,
-    _rule_unnecessary_copy,
-    _rule_large_stack_alloc,
-    _rule_mutex_in_loop,
-    _rule_string_concat_in_loop,
-    _rule_shared_ptr_overhead,
-    _rule_exception_in_loop,
-    _rule_virtual_dispatch,
-    _rule_endl_vs_newline,
-    _rule_inefficient_find,
-    _rule_move_semantics,
-]
+RULE_REGISTRY = {
+    "pass_by_value": _rule_pass_by_value,
+    "vector_no_reserve": _rule_vector_no_reserve,
+    "map_over_unordered_map": _rule_map_over_unordered,
+    "heap_alloc_in_loop": _rule_heap_alloc_in_loop,
+    "unnecessary_copy": _rule_unnecessary_copy,
+    "large_stack_alloc": _rule_large_stack_alloc,
+    "mutex_in_tight_loop": _rule_mutex_in_loop,
+    "string_concat_in_loop": _rule_string_concat_in_loop,
+    "shared_ptr_overhead": _rule_shared_ptr_overhead,
+    "exception_in_loop": _rule_exception_in_loop,
+    "virtual_dispatch": _rule_virtual_dispatch,
+    "endl_flush": _rule_endl_vs_newline,
+    "inefficient_find": _rule_inefficient_find,
+    "move_on_return": _rule_move_semantics,
+}
+
+ALL_RULES = list(RULE_REGISTRY.values())
+ALL_RULE_NAMES = list(RULE_REGISTRY.keys())
 
 
 # ─── Public API ──────────────────────────────────────────────────────
 
 def analyze_cpp(code: str, file_path: str = "<input>",
-                start_line: int = 1) -> AnalysisReport:
-    """Run all C++ performance rules against a block of code.
+                start_line: int = 1,
+                config: dict | None = None) -> AnalysisReport:
+    """Run C++ performance rules against a block of code.
 
     Args:
         code: C++ source code as a string.
         file_path: File path for the report (cosmetic).
-        start_line: 1-based line number of the first line in `code`,
-                    used when analyzing a code block extracted from a diff.
+        start_line: 1-based line number of the first line in `code`.
+        config: Optional rule configuration dict with:
+            - enabled_rules: list of rule names to run (None = all)
+            - disabled_rules: list of rule names to skip
+            - severity_overrides: dict of {rule_name: new_severity}
 
     Returns:
         AnalysisReport with all findings sorted by line number.
@@ -515,27 +522,50 @@ def analyze_cpp(code: str, file_path: str = "<input>",
     lines = code.split("\n")
     report = AnalysisReport(file_path=file_path)
 
-    for rule_fn in ALL_RULES:
+    # Determine which rules to run
+    rules_to_run = _resolve_rules(config)
+
+    for rule_fn in rules_to_run:
         report.findings.extend(rule_fn(lines, start_line))
 
-    # Sort by line, then severity (high first)
+    # Apply severity overrides
+    if config and config.get("severity_overrides"):
+        overrides = config["severity_overrides"]
+        for f in report.findings:
+            if f.rule in overrides:
+                f.severity = overrides[f.rule]
+
     severity_order = {"high": 0, "medium": 1, "low": 2}
     report.findings.sort(key=lambda f: (f.line, severity_order.get(f.severity, 3)))
     return report
 
 
-def analyze_cpp_blocks(blocks: list, file_path: str = "<input>") -> AnalysisReport:
-    """Convenience: run analysis over a list of CodeBlock objects.
-
-    Merges findings from all blocks into one report.
-    """
+def analyze_cpp_blocks(blocks: list, file_path: str = "<input>",
+                       config: dict | None = None) -> AnalysisReport:
+    """Run analysis over a list of CodeBlock objects with optional config."""
     report = AnalysisReport(file_path=file_path)
     for block in blocks:
         code = block.text if hasattr(block, "text") else "\n".join(block.get("lines", []))
         start = block.start_line if hasattr(block, "start_line") else block.get("start_line", 1)
-        sub = analyze_cpp(code, file_path, start_line=start)
+        sub = analyze_cpp(code, file_path, start_line=start, config=config)
         report.findings.extend(sub.findings)
 
     severity_order = {"high": 0, "medium": 1, "low": 2}
     report.findings.sort(key=lambda f: (f.line, severity_order.get(f.severity, 3)))
     return report
+
+
+def _resolve_rules(config: dict | None) -> list:
+    """Determine which rule functions to execute based on config."""
+    if not config:
+        return ALL_RULES
+
+    enabled = config.get("enabled_rules")
+    disabled = config.get("disabled_rules", [])
+
+    if enabled is not None:
+        # Whitelist mode — only run specified rules
+        return [RULE_REGISTRY[r] for r in enabled if r in RULE_REGISTRY]
+
+    # Blacklist mode — run all except disabled
+    return [fn for name, fn in RULE_REGISTRY.items() if name not in disabled]

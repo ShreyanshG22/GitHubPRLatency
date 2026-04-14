@@ -24,7 +24,7 @@ from github_client import validate_webhook_signature, fetch_pr_diff
 from analyzer import analyze_diff
 from comment_bot import post_review_comment, format_review_body
 from diff_parser import parse_diff
-from cpp_analyzer import analyze_cpp, analyze_cpp_blocks
+from cpp_analyzer import analyze_cpp, analyze_cpp_blocks, ALL_RULE_NAMES
 
 # ─── Config ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -253,6 +253,30 @@ async def reset_password(data: ResetPasswordRequest):
     return {"message": "Password reset successfully"}
 
 
+# ─── Rate Limiting ───────────────────────────────────────────────────
+async def check_rate_limit(repo_full_name: str, default_rpm: int = 30) -> bool:
+    """Check if a repo has exceeded its rate limit. Returns True if allowed."""
+    # Check for per-repo override
+    repo_settings = await db.repo_settings.find_one(
+        {"repo_full_name": repo_full_name}, {"_id": 0}
+    )
+    max_rpm = (repo_settings or {}).get("rate_limit_rpm", default_rpm)
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(seconds=60)
+
+    count = await db.rate_limits.count_documents({
+        "repo": repo_full_name,
+        "ts": {"$gte": window_start}
+    })
+
+    if count >= max_rpm:
+        return False
+
+    await db.rate_limits.insert_one({"repo": repo_full_name, "ts": now})
+    return True
+
+
 # ─── GitHub Webhook Endpoint ─────────────────────────────────────────
 async def process_pull_request(payload: dict, delivery_id: str):
     """Background task: analyze PR and post review."""
@@ -293,12 +317,20 @@ async def process_pull_request(payload: dict, delivery_id: str):
         # Analyze with structured blocks
         result = await analyze_diff(diff, pr_title, pr_author, parsed=parsed)
 
+        # ── P1: Load per-repo rule configuration ──
+        repo_settings = await db.repo_settings.find_one(
+            {"repo_full_name": repo_full_name}, {"_id": 0}
+        )
+        rule_config = (repo_settings or {}).get("rule_config")
+        severity_threshold = (repo_settings or {}).get("severity_threshold")
+        auto_post = (repo_settings or {}).get("auto_post_comments", True)
+
         # Run static C++ analysis on any C++ files in the diff
         from diff_parser import Language
         cpp_files = parsed.files_by_language(Language.CPP)
         cpp_static_findings = []
         for cpp_file in cpp_files:
-            report = analyze_cpp_blocks(cpp_file.blocks, cpp_file.path)
+            report = analyze_cpp_blocks(cpp_file.blocks, cpp_file.path, config=rule_config)
             for f in report.findings:
                 cpp_static_findings.append({
                     "path": report.file_path,
@@ -312,6 +344,15 @@ async def process_pull_request(payload: dict, delivery_id: str):
             result["comments"] = result.get("comments", []) + cpp_static_findings
             logger.info(f"Added {len(cpp_static_findings)} C++ static findings for {repo_full_name}#{pr_number}")
 
+        # ── P1: Apply severity threshold filter ──
+        if severity_threshold:
+            threshold_map = {"high": 0, "error": 0, "medium": 1, "warning": 1, "low": 2, "info": 2}
+            threshold_val = threshold_map.get(severity_threshold, 2)
+            result["comments"] = [
+                c for c in result["comments"]
+                if threshold_map.get(c.get("severity", "info"), 2) <= threshold_val
+            ]
+
         # Update analysis
         update_data = {
             "summary": result["summary"],
@@ -322,12 +363,13 @@ async def process_pull_request(payload: dict, delivery_id: str):
         }
         await db.reviews.update_one({"id": analysis.id}, {"$set": update_data})
 
-        # Post comment to GitHub
-        await post_review_comment(
-            repo_full_name, pr_number,
-            result["comments"], result["summary"],
-            result["score"], head_sha
-        )
+        # Post comment to GitHub (respects per-repo auto_post setting)
+        if auto_post:
+            await post_review_comment(
+                repo_full_name, pr_number,
+                result["comments"], result["summary"],
+                result["score"], head_sha
+            )
 
         # Update webhook log
         await db.webhook_logs.update_one(
@@ -367,6 +409,18 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     repo_full_name = repo.get("full_name", "unknown")
     pr_number = payload.get("pull_request", {}).get("number") if "pull_request" in payload else None
 
+    # ── P1: Webhook retry deduplication ──
+    if delivery_id:
+        existing = await db.webhook_logs.find_one({"delivery_id": delivery_id})
+        if existing:
+            logger.info(f"Duplicate delivery {delivery_id} — skipping")
+            return {"message": "Delivery already processed", "duplicate": True}
+
+    # ── P1: Rate limiting ──
+    if not await check_rate_limit(repo_full_name):
+        logger.warning(f"Rate limit exceeded for {repo_full_name}")
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for this repository")
+
     # Log webhook event
     log = WebhookLog(
         event_type=event,
@@ -381,6 +435,13 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     # Handle ping event
     if event == "ping":
         return {"message": "pong"}
+
+    # ── P1: Check repo settings — is this repo enabled? ──
+    repo_settings = await db.repo_settings.find_one(
+        {"repo_full_name": repo_full_name}, {"_id": 0}
+    )
+    if repo_settings and not repo_settings.get("enabled", True):
+        return {"message": f"Analysis disabled for {repo_full_name}"}
 
     # Handle pull request events
     if event == "pull_request" and action in ("opened", "synchronize", "reopened"):
@@ -456,11 +517,27 @@ class CppAnalyzeRequest(_BM):
     code: str
     file_path: str = "<input>"
     start_line: int = 1
+    config: dict | None = None
 
 class PreviewCommentRequest(_BM):
     comments: list = []
     summary: str = "Analysis complete."
     score: int = 75
+
+class RepoSettingsCreate(_BM):
+    repo_full_name: str
+    enabled: bool = True
+    auto_post_comments: bool = True
+    rate_limit_rpm: int = 30
+    severity_threshold: str | None = None  # "high", "medium", or None (all)
+    rule_config: dict | None = None  # {enabled_rules, disabled_rules, severity_overrides}
+
+class RepoSettingsUpdate(_BM):
+    enabled: bool | None = None
+    auto_post_comments: bool | None = None
+    rate_limit_rpm: int | None = None
+    severity_threshold: str | None = None
+    rule_config: dict | None = None
 
 @api_router.post("/parse-diff")
 async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
@@ -496,7 +573,7 @@ async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
 async def analyze_cpp_endpoint(body: CppAnalyzeRequest, request: Request):
     """Run C++ static performance analysis on submitted code."""
     await get_current_user(request)
-    report = analyze_cpp(body.code, body.file_path, body.start_line)
+    report = analyze_cpp(body.code, body.file_path, body.start_line, config=body.config)
     return {
         "file_path": report.file_path,
         "total_findings": report.count,
@@ -513,6 +590,100 @@ async def preview_comment_endpoint(body: PreviewCommentRequest, request: Request
     await get_current_user(request)
     markdown = format_review_body(body.comments, body.summary, body.score)
     return {"markdown": markdown}
+
+
+# ─── P1: Repo Settings CRUD ──────────────────────────────────────────
+@api_router.get("/available-rules")
+async def get_available_rules(request: Request):
+    """Return all available C++ analysis rule names."""
+    await get_current_user(request)
+    return {"rules": ALL_RULE_NAMES}
+
+
+@api_router.get("/repo-settings")
+async def list_repo_settings(request: Request):
+    """List all configured repository settings."""
+    await get_current_user(request)
+    settings = await db.repo_settings.find({}, {"_id": 0}).to_list(100)
+    return settings
+
+
+@api_router.get("/repo-settings/{repo_owner}/{repo_name}")
+async def get_repo_settings(repo_owner: str, repo_name: str, request: Request):
+    """Get settings for a specific repository."""
+    await get_current_user(request)
+    repo_full_name = f"{repo_owner}/{repo_name}"
+    settings = await db.repo_settings.find_one(
+        {"repo_full_name": repo_full_name}, {"_id": 0}
+    )
+    if not settings:
+        # Return defaults
+        return {
+            "repo_full_name": repo_full_name,
+            "enabled": True,
+            "auto_post_comments": True,
+            "rate_limit_rpm": 30,
+            "severity_threshold": None,
+            "rule_config": None,
+            "is_default": True,
+        }
+    return settings
+
+
+@api_router.post("/repo-settings")
+async def create_repo_settings(body: RepoSettingsCreate, request: Request):
+    """Create settings for a repository."""
+    await get_current_user(request)
+    existing = await db.repo_settings.find_one({"repo_full_name": body.repo_full_name})
+    if existing:
+        raise HTTPException(status_code=409, detail="Settings already exist for this repo. Use PUT to update.")
+
+    doc = body.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    doc["updated_at"] = doc["created_at"]
+    await db.repo_settings.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.put("/repo-settings/{repo_owner}/{repo_name}")
+async def update_repo_settings(repo_owner: str, repo_name: str, body: RepoSettingsUpdate, request: Request):
+    """Update settings for a repository (partial update)."""
+    await get_current_user(request)
+    repo_full_name = f"{repo_owner}/{repo_name}"
+
+    update_fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    result = await db.repo_settings.find_one_and_update(
+        {"repo_full_name": repo_full_name},
+        {"$set": update_fields},
+        upsert=True,
+        return_document=True,
+    )
+    result.pop("_id", None)
+    # Ensure repo_full_name is set on upsert
+    if "repo_full_name" not in result:
+        await db.repo_settings.update_one(
+            {"repo_full_name": repo_full_name},
+            {"$set": {"repo_full_name": repo_full_name}}
+        )
+        result["repo_full_name"] = repo_full_name
+    return result
+
+
+@api_router.delete("/repo-settings/{repo_owner}/{repo_name}")
+async def delete_repo_settings(repo_owner: str, repo_name: str, request: Request):
+    """Delete settings for a repository (reverts to defaults)."""
+    await get_current_user(request)
+    repo_full_name = f"{repo_owner}/{repo_name}"
+    result = await db.repo_settings.delete_one({"repo_full_name": repo_full_name})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No settings found for this repo")
+    return {"message": f"Settings deleted for {repo_full_name}"}
 
 
 # ─── Include Router & Middleware ──────────────────────────────────────
@@ -536,6 +707,11 @@ async def startup():
     await db.login_attempts.create_index("identifier")
     await db.webhook_logs.create_index("created_at")
     await db.reviews.create_index("created_at")
+    # P1 indexes
+    await db.rate_limits.create_index("ts", expireAfterSeconds=120)  # auto-expire after 2 min
+    await db.rate_limits.create_index([("repo", 1), ("ts", 1)])
+    await db.repo_settings.create_index("repo_full_name", unique=True)
+    await db.webhook_logs.create_index("delivery_id")
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
@@ -571,7 +747,14 @@ async def startup():
         f.write("## Webhook Endpoint\n- POST /api/github-webhook\n\n")
         f.write("## Dashboard Endpoints (auth required)\n")
         f.write("- GET /api/webhook-logs\n- GET /api/reviews\n")
-        f.write("- GET /api/reviews/{review_id}\n- GET /api/stats\n")
+        f.write("- GET /api/reviews/{review_id}\n- GET /api/stats\n\n")
+        f.write("## Repo Settings Endpoints (auth required)\n")
+        f.write("- GET /api/available-rules\n")
+        f.write("- GET /api/repo-settings\n")
+        f.write("- GET /api/repo-settings/{owner}/{name}\n")
+        f.write("- POST /api/repo-settings\n")
+        f.write("- PUT /api/repo-settings/{owner}/{name}\n")
+        f.write("- DELETE /api/repo-settings/{owner}/{name}\n")
 
     logger.info("PR Review Bot API started")
 
