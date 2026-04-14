@@ -1,0 +1,124 @@
+{
+  "theme": "light",
+  "archetype": "4_swiss_high_contrast",
+  "domain": "Developer Tools & AI Dashboard",
+  "emotional_tone": "Objective, rigid, functional, high-performance, and trustworthy.",
+  "typography": {
+    "primary_heading_font": "IBM Plex Sans",
+    "secondary_body_font": "Inter",
+    "mono_accent_font": "JetBrains Mono",
+    "banned_heading_fonts": [
+      "Inter",
+      "Roboto",
+      "Open Sans",
+      "Lato",
+      "Syne"
+    ],
+    "scale_rules": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight leading-none font-medium",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "body": "text-base leading-relaxed text-slate-700",
+      "labels_overlines": "text-xs uppercase tracking-[0.2em] font-mono text-slate-500",
+      "code_blocks": "font-mono text-sm bg-slate-50 text-slate-900 border border-slate-200"
+    }
+  },
+  "colors": {
+    "background": {
+      "base": "#FFFFFF",
+      "subtle": "#F8F9FA",
+      "muted": "#F1F3F5"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#495057",
+      "tertiary": "#868E96"
+    },
+    "brand_accents": {
+      "primary": "#002FA7",
+      "hover": "#00227A",
+      "danger": "#FF2B2B",
+      "warning": "#FFD700",
+      "success": "#00A86B"
+    },
+    "borders": {
+      "default": "#E5E7EB",
+      "focus": "#002FA7"
+    },
+    "rules": [
+      "No pure #000000 or #808080. Use tinted greys.",
+      "95% of the UI should be monochrome. Color exists only to guide action or indicate status (failed/passed PRs).",
+      "Text contrast must meet APCA standards."
+    ]
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "p-1, p-2, p-4, p-6, p-8, p-12, p-16, p-24, p-32",
+    "generous_spacing": true,
+    "grid_strategy": "The Control Room Grid",
+    "grid_details": {
+      "base": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+      "gap": "gap-4",
+      "items": "Every pixel utilized. Use h-full on children to stretch."
+    },
+    "alignment": "Left-align dense content, tabular data, and forms. Center only for visual hierarchy in empty states."
+  },
+  "surfaces_and_borders": {
+    "strategy": "Grid Borders (The 'Technical' Look)",
+    "container_style": "border-collapse style layout. Visible skeleton.",
+    "cards": "Flat background, 1px subtle border, no shadow. Strict right angles or max 4px radius (rounded-sm).",
+    "header_nav": "Crystal Glass variant if scrolling under (backdrop-blur-xl bg-white/80 border-b border-border/50). Solid background if content cuts off.",
+    "buttons": "Sharp edges, 1px border. Dark monochrome or High-contrast Klein Blue for primary."
+  },
+  "components_strategy": {
+    "shadcn_customization": "Go cardless or use strictly rectangular, dense styles. Do NOT overuse the standard Card component with soft shadows. Strip Vercel-look for Swiss Brutalist look.",
+    "forms_and_inputs": "Use Shadcn components heavily customized. Flat, sharp borders. Focus rings must be tight and high contrast (ring-2 ring-blue-600).",
+    "tables": "Use Shadcn tables. Zebra striping for dense data. Sticky headers. Right-align numbers.",
+    "icons": "Use Phosphor Icons (yarn add @phosphor-icons/react) for dense developer tools.",
+    "banned_elements": [
+      "Standard Bootstrap columns",
+      "Soft UI / Neumorphism",
+      "Full-screen generic gradients",
+      "Rounded-xl or pill-shaped containers (except badges)"
+    ]
+  },
+  "motion_and_interactions": {
+    "philosophy": "Minimalist, snappy. Functional feedback.",
+    "hover_states": "ALWAYS explicitly set text color on hover. Slight background darken.",
+    "transitions": "Use specific properties (transition-colors, transition-opacity) duration-150 ease-out.",
+    "accessibility": "Respect prefers-reduced-motion."
+  },
+  "media_and_images": {
+    "usage": "Minimal imagery. Focus on typography, data, and layout.",
+    "image_urls": [
+      {
+        "category": "logo",
+        "url": "https://static.prod-images.emergentagent.com/jobs/08f97c6a-4df8-4239-81f2-dbdcc7b47b9e/images/09e2ef867473ccebed66e4b5c893cbb89459d2ede7a3e9e33cf3a79e672cb27a.png",
+        "description": "Abstract minimalist AI developer tool logo. Use for branding in header and login page.",
+        "dimensions": "1024x1024"
+      },
+      {
+        "category": "login_background",
+        "url": "https://static.prod-images.emergentagent.com/jobs/08f97c6a-4df8-4239-81f2-dbdcc7b47b9e/images/d5b138a931409a4a3df731a8de37586e06e20ae7314354900ff4947a58046e23.png",
+        "description": "Swiss style abstract geometric architectural background for the login/auth split-screen layout.",
+        "dimensions": "1536x1024"
+      }
+    ],
+    "avatar_fallback": "Use UI gradients or typographic initials for user/PR author avatars. Do not use generic placeholders."
+  },
+  "testing": {
+    "data_testid_convention": "All interactive and key informational elements MUST include a data-testid attribute.",
+    "format": "kebab-case, role-based",
+    "examples": [
+      "login-submit-button",
+      "pr-review-table",
+      "webhook-status-badge"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the JSON guidelines for color, typography, and spacing.",
+    "Install required icon library: yarn add @phosphor-icons/react",
+    "Build the dashboard using a 'Control Room' grid approach with stark, high-contrast borders.",
+    "For the login page, use a split screen: left side contains the auth form, right side uses the 'login_background' image with a dark/blue gradient overlay to keep it architectural.",
+    "Make sure every interactive element has a data-testid."
+  ]
+}
