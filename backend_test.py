@@ -1800,6 +1800,284 @@ void process(std::vector<int> data) {  // pass_by_value
         
         return True, {"custom_rules_tests": "all_passed"}
 
+    # ─── P2 Feature Tests ────────────────────────────────────────────────
+
+    def test_stats_trends(self):
+        """Test GET /api/stats/trends endpoint"""
+        success, response = self.run_test(
+            "Stats Trends (30 days)", "GET", "stats/trends?days=30", 200
+        )
+        
+        if success:
+            # Should return an array (empty or with data)
+            if isinstance(response, list):
+                self.log(f"   ✅ Trends returned array with {len(response)} entries")
+                
+                # If there are entries, validate structure
+                if len(response) > 0:
+                    entry = response[0]
+                    required_fields = ["date", "count", "avg_score", "min_score", "max_score"]
+                    if all(field in entry for field in required_fields):
+                        self.log("   ✅ Trend entries have all required fields")
+                        return True, response
+                    else:
+                        self.log(f"   ❌ Missing fields in trend entry: {entry}")
+                        return False, {}
+                else:
+                    self.log("   ✅ Empty trends array (no data yet)")
+                    return True, response
+            else:
+                self.log(f"   ❌ Expected array, got: {type(response)}")
+        
+        return False, {}
+
+    def test_webhook_replay_nonexistent(self):
+        """Test webhook replay for non-existent log"""
+        fake_log_id = f"fake-log-{int(time.time())}"
+        
+        success, response = self.run_test(
+            "Webhook Replay - Non-existent Log", 
+            "POST", 
+            f"webhook-logs/{fake_log_id}/replay", 
+            404
+        )
+        
+        if success:
+            self.log("   ✅ Non-existent log correctly returned 404")
+            return True, response
+        
+        return False, {}
+
+    def test_webhook_replay_pull_request(self):
+        """Test webhook replay for pull_request event"""
+        # First, create a webhook log by sending a PR event
+        pr_payload = {
+            "action": "opened",
+            "number": 999,
+            "pull_request": {
+                "id": 999,
+                "number": 999,
+                "title": "Test PR for replay",
+                "user": {"login": "testuser", "id": 123},
+                "head": {"sha": "abc123def456"},
+                "html_url": "https://github.com/testuser/replay-test/pull/999"
+            },
+            "repository": {
+                "id": 35129377,
+                "name": "replay-test",
+                "full_name": "testuser/replay-test",
+                "owner": {"login": "testuser", "id": 123}
+            }
+        }
+        
+        delivery_id = f"replay-test-{int(time.time())}"
+        headers = {
+            'X-GitHub-Event': 'pull_request',
+            'X-GitHub-Delivery': delivery_id,
+            'Content-Type': 'application/json'
+        }
+        
+        url = f"{self.base_url}/api/github-webhook"
+        
+        # Send the original webhook
+        self.tests_run += 1
+        self.log(f"🔍 Testing Webhook Replay - Creating Original Log...")
+        
+        try:
+            response = requests.post(url, json=pr_payload, headers=headers)
+            if response.status_code == 200:
+                self.tests_passed += 1
+                self.log("   ✅ Original webhook processed")
+                
+                # Wait a moment for processing
+                time.sleep(1)
+                
+                # Get webhook logs to find the log ID
+                success, logs_response = self.run_test(
+                    "Get Webhook Logs for Replay", "GET", "webhook-logs", 200
+                )
+                
+                if success and isinstance(logs_response, list) and len(logs_response) > 0:
+                    # Find our log entry
+                    target_log = None
+                    for log in logs_response:
+                        if (log.get("delivery_id") == delivery_id and 
+                            log.get("event_type") == "pull_request" and
+                            log.get("pr_number") == 999):
+                            target_log = log
+                            break
+                    
+                    if target_log:
+                        log_id = target_log.get("id")
+                        self.log(f"   Found log ID: {log_id}")
+                        
+                        # Now test the replay
+                        success, replay_response = self.run_test(
+                            "Webhook Replay - Pull Request",
+                            "POST",
+                            f"webhook-logs/{log_id}/replay",
+                            200
+                        )
+                        
+                        if success:
+                            if "Replaying analysis" in replay_response.get("message", ""):
+                                self.log("   ✅ Replay initiated successfully")
+                                return True, replay_response
+                            else:
+                                self.log(f"   ❌ Unexpected replay response: {replay_response}")
+                        
+                        return False, {}
+                    else:
+                        self.log("   ❌ Could not find webhook log entry")
+                        return False, {}
+                else:
+                    self.log("   ❌ Failed to get webhook logs")
+                    return False, {}
+            else:
+                self.log(f"   ❌ Original webhook failed: {response.status_code}")
+                return False, {}
+                
+        except Exception as e:
+            self.log(f"   ❌ Error: {str(e)}")
+            return False, {}
+
+    def test_team_list_admin_only(self):
+        """Test GET /api/team returns 403 for non-admin"""
+        # First test with admin (should work)
+        success, response = self.run_test(
+            "Team List - Admin Access", "GET", "team", 200
+        )
+        
+        if success:
+            if isinstance(response, list):
+                self.log(f"   ✅ Admin can access team list ({len(response)} members)")
+            else:
+                self.log(f"   ❌ Expected list, got: {type(response)}")
+                return False, {}
+        else:
+            return False, {}
+        
+        # Create a regular user and test with them
+        test_user_data = {
+            "email": f"regular_user_{int(time.time())}@example.com",
+            "password": "TestPass123!",
+            "name": "Regular User"
+        }
+        
+        # Register regular user
+        success, user_response = self.run_test(
+            "Register Regular User", "POST", "auth/register", 200, test_user_data
+        )
+        
+        if not success:
+            self.log("   ❌ Failed to create regular user")
+            return False, {}
+        
+        # Test team access with regular user (should get 403)
+        success, response = self.run_test(
+            "Team List - Non-Admin Access", "GET", "team", 403
+        )
+        
+        if success:
+            self.log("   ✅ Non-admin correctly denied access (403)")
+            return True, response
+        else:
+            self.log("   ❌ Non-admin should get 403")
+            return False, {}
+
+    def test_team_update_role(self):
+        """Test PUT /api/team/{email}/role"""
+        # Create a test user first
+        test_email = f"role_test_{int(time.time())}@example.com"
+        test_user_data = {
+            "email": test_email,
+            "password": "TestPass123!",
+            "name": "Role Test User"
+        }
+        
+        success, _ = self.run_test(
+            "Create User for Role Test", "POST", "auth/register", 200, test_user_data
+        )
+        
+        if not success:
+            return False, {}
+        
+        # Re-login as admin
+        self.test_auth_login_admin()
+        
+        # Update user role to member
+        success, response = self.run_test(
+            "Update User Role to Member",
+            "PUT",
+            f"team/{test_email}/role",
+            200,
+            {"role": "member"}
+        )
+        
+        if success:
+            if "Role updated" in response.get("message", ""):
+                self.log("   ✅ Role updated successfully")
+                return True, response
+            else:
+                self.log(f"   ❌ Unexpected response: {response}")
+        
+        return False, {}
+
+    def test_team_remove_member(self):
+        """Test DELETE /api/team/{email}"""
+        # Create a test user first
+        test_email = f"remove_test_{int(time.time())}@example.com"
+        test_user_data = {
+            "email": test_email,
+            "password": "TestPass123!",
+            "name": "Remove Test User"
+        }
+        
+        success, _ = self.run_test(
+            "Create User for Remove Test", "POST", "auth/register", 200, test_user_data
+        )
+        
+        if not success:
+            return False, {}
+        
+        # Re-login as admin
+        self.test_auth_login_admin()
+        
+        # Remove the user
+        success, response = self.run_test(
+            "Remove Team Member",
+            "DELETE",
+            f"team/{test_email}",
+            200
+        )
+        
+        if success:
+            if "removed" in response.get("message", "").lower():
+                self.log("   ✅ User removed successfully")
+                return True, response
+            else:
+                self.log(f"   ❌ Unexpected response: {response}")
+        
+        return False, {}
+
+    def test_team_cannot_remove_self(self):
+        """Test that admin cannot remove themselves"""
+        admin_email = "admin@example.com"
+        
+        success, response = self.run_test(
+            "Remove Self (Should Fail)",
+            "DELETE",
+            f"team/{admin_email}",
+            400
+        )
+        
+        if success:
+            self.log("   ✅ Admin correctly prevented from removing self (400)")
+            return True, response
+        else:
+            self.log("   ❌ Admin should not be able to remove self")
+            return False, {}
+
 def main():
     print("=" * 60)
     print("🚀 PR Review Bot API Testing")
@@ -1863,6 +2141,15 @@ def main():
         ("P1: Repo Settings Edge Cases", tester.test_repo_settings_edge_cases),
         ("P1: Repo Settings Auth Required", tester.test_repo_settings_auth_required),
         ("P1: C++ Custom Rules Config", tester.test_cpp_analyzer_custom_rules),
+        
+        # P2 Feature Tests
+        ("P2: Stats Trends", tester.test_stats_trends),
+        ("P2: Webhook Replay Non-existent", tester.test_webhook_replay_nonexistent),
+        ("P2: Webhook Replay Pull Request", tester.test_webhook_replay_pull_request),
+        ("P2: Team List Admin Only", tester.test_team_list_admin_only),
+        ("P2: Team Update Role", tester.test_team_update_role),
+        ("P2: Team Remove Member", tester.test_team_remove_member),
+        ("P2: Team Cannot Remove Self", tester.test_team_cannot_remove_self),
         
         ("Logout", tester.test_auth_logout),
         ("Unauthorized Access", tester.test_invalid_auth),

@@ -156,7 +156,7 @@ async def register(data: UserCreate, response: Response):
     refresh_token = create_refresh_token(user_id)
     set_auth_cookies(response, access_token, refresh_token)
 
-    return {"id": user_id, "email": email, "name": data.name, "role": "user", "created_at": user_doc["created_at"]}
+    return {"id": user_id, "email": email, "name": data.name, "role": "user", "created_at": user_doc["created_at"], "token": access_token}
 
 
 @api_router.post("/auth/login")
@@ -181,7 +181,8 @@ async def login(data: UserLogin, request: Request, response: Response):
 
     return {
         "id": user_id, "email": user["email"], "name": user.get("name", ""),
-        "role": user.get("role", "user"), "created_at": user.get("created_at", "")
+        "role": user.get("role", "user"), "created_at": user.get("created_at", ""),
+        "token": access_token
     }
 
 
@@ -500,6 +501,136 @@ async def get_stats(request: Request):
         "failed_reviews": failed_reviews,
         "avg_score": avg_score
     }
+
+
+# ─── P2: Trends API ──────────────────────────────────────────────────
+@api_router.get("/stats/trends")
+async def get_stats_trends(request: Request, days: int = 30):
+    """Return daily review counts and average scores for charting."""
+    await get_current_user(request)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    pipeline = [
+        {"$match": {"status": "completed", "completed_at": {"$gte": cutoff}}},
+        {"$addFields": {"date": {"$substr": ["$completed_at", 0, 10]}}},
+        {"$group": {
+            "_id": "$date",
+            "count": {"$sum": 1},
+            "avg_score": {"$avg": "$score"},
+            "min_score": {"$min": "$score"},
+            "max_score": {"$max": "$score"},
+        }},
+        {"$sort": {"_id": 1}},
+    ]
+    results = await db.reviews.aggregate(pipeline).to_list(days)
+    return [
+        {
+            "date": r["_id"],
+            "count": r["count"],
+            "avg_score": round(r["avg_score"], 1),
+            "min_score": r["min_score"],
+            "max_score": r["max_score"],
+        }
+        for r in results
+    ]
+
+
+# ─── P2: Webhook Replay ──────────────────────────────────────────────
+@api_router.post("/webhook-logs/{log_id}/replay")
+async def replay_webhook(log_id: str, request: Request, background_tasks: BackgroundTasks):
+    """Re-trigger processing for a webhook delivery."""
+    await get_current_user(request)
+    log_entry = await db.webhook_logs.find_one({"id": log_id}, {"_id": 0})
+    if not log_entry:
+        raise HTTPException(status_code=404, detail="Webhook log not found")
+
+    if log_entry.get("event_type") != "pull_request":
+        raise HTTPException(status_code=400, detail="Only pull_request events can be replayed")
+
+    # Find the original review to get PR info
+    pr_number = log_entry.get("pr_number")
+    repo_full_name = log_entry.get("repo_full_name", "")
+    if not pr_number or not repo_full_name:
+        raise HTTPException(status_code=400, detail="Missing PR number or repo info")
+
+    # Create a synthetic payload for reprocessing
+    replay_delivery = f"replay-{log_id}-{datetime.now(timezone.utc).strftime('%H%M%S')}"
+    synthetic_payload = {
+        "action": "reopened",
+        "pull_request": {
+            "number": pr_number,
+            "title": f"[Replay] PR #{pr_number}",
+            "user": {"login": "replay"},
+            "html_url": f"https://github.com/{repo_full_name}/pull/{pr_number}",
+            "head": {"sha": ""},
+        },
+        "repository": {"full_name": repo_full_name},
+    }
+
+    # Log the replay
+    replay_log = WebhookLog(
+        event_type="pull_request",
+        action="replay",
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        delivery_id=replay_delivery,
+        status="received"
+    )
+    await db.webhook_logs.insert_one(replay_log.model_dump())
+
+    background_tasks.add_task(process_pull_request, synthetic_payload, replay_delivery)
+    return {"message": f"Replaying analysis for {repo_full_name}#{pr_number}", "delivery_id": replay_delivery}
+
+
+# ─── P2: Team Management ─────────────────────────────────────────────
+@api_router.get("/team")
+async def list_team(request: Request):
+    """List all users (admin only)."""
+    current = await get_current_user(request)
+    if current.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
+    # Add string id
+    for u in users:
+        if "_id" in u:
+            del u["_id"]
+    return users
+
+
+@api_router.put("/team/{user_email}/role")
+async def update_user_role(user_email: str, request: Request):
+    """Update a user's role (admin only)."""
+    current = await get_current_user(request)
+    if current.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    body = await request.json()
+    new_role = body.get("role", "")
+    if new_role not in ("admin", "member", "viewer"):
+        raise HTTPException(status_code=400, detail="Role must be admin, member, or viewer")
+
+    result = await db.users.update_one(
+        {"email": user_email.lower()},
+        {"$set": {"role": new_role}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": f"Role updated to {new_role}", "email": user_email}
+
+
+@api_router.delete("/team/{user_email}")
+async def remove_team_member(user_email: str, request: Request):
+    """Remove a user (admin only, cannot remove self)."""
+    current = await get_current_user(request)
+    if current.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if current["email"] == user_email.lower():
+        raise HTTPException(status_code=400, detail="Cannot remove yourself")
+
+    result = await db.users.delete_one({"email": user_email.lower()})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": f"User {user_email} removed"}
 
 
 @api_router.get("/")

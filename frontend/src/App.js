@@ -4,6 +4,8 @@ import axios from 'axios';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import ReviewDetailPage from './pages/ReviewDetailPage';
+import SettingsPage from './pages/SettingsPage';
+import TeamPage from './pages/TeamPage';
 import './App.css';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -15,15 +17,26 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
+// Axios instance with automatic token injection
+export const api = axios.create({ baseURL: API });
+api.interceptors.request.use(cfg => {
+  const token = localStorage.getItem('token');
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  return cfg;
+});
+
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);      // null = checking
   const [checked, setChecked] = useState(false);
 
   const checkAuth = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${API}/api/auth/me`, { withCredentials: true });
+      const token = localStorage.getItem('token');
+      if (!token) { setUser(false); setChecked(true); return; }
+      const { data } = await api.get('/api/auth/me');
       setUser(data);
     } catch {
+      localStorage.removeItem('token');
       setUser(false);
     } finally {
       setChecked(true);
@@ -33,19 +46,22 @@ function AuthProvider({ children }) {
   useEffect(() => { checkAuth(); }, [checkAuth]);
 
   const login = async (email, password) => {
-    const { data } = await axios.post(`${API}/api/auth/login`, { email, password }, { withCredentials: true });
+    const { data } = await api.post('/api/auth/login', { email, password });
+    localStorage.setItem('token', data.token);
     setUser(data);
     return data;
   };
 
   const register = async (email, password, name) => {
-    const { data } = await axios.post(`${API}/api/auth/register`, { email, password, name }, { withCredentials: true });
+    const { data } = await api.post('/api/auth/register', { email, password, name });
+    localStorage.setItem('token', data.token);
     setUser(data);
     return data;
   };
 
   const logout = async () => {
-    await axios.post(`${API}/api/auth/logout`, {}, { withCredentials: true });
+    try { await api.post('/api/auth/logout'); } catch {}
+    localStorage.removeItem('token');
     setUser(false);
   };
 
@@ -86,6 +102,8 @@ export default function App() {
           <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/review/:reviewId" element={<ProtectedRoute><ReviewDetailPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/team" element={<ProtectedRoute><TeamPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

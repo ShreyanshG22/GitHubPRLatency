@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { api } from '../App';
 import {
   ArrowLeft, GitPullRequest, CheckCircle,
   Warning, Info, XCircle, Clock
 } from '@phosphor-icons/react';
 
-const API = process.env.REACT_APP_BACKEND_URL;
 
 function SeverityIcon({ severity }) {
   const map = {
@@ -27,7 +26,7 @@ export default function ReviewDetailPage() {
   useEffect(() => {
     (async () => {
       try {
-        const { data } = await axios.get(`${API}/api/reviews/${reviewId}`, { withCredentials: true });
+        const { data } = await api.get(`/api/reviews/${reviewId}`);
         setReview(data);
       } catch (err) {
         setError('Review not found');
