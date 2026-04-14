@@ -79,3 +79,13 @@ Create a FastAPI backend for a GitHub App that reviews pull requests with webhoo
 - Integrated into webhook pipeline: C++ files get static analysis merged with LLM review
 - Fixed _is_inside_loop heuristic to handle nested non-loop scopes (try/if inside for)
 - 33/33 backend tests passed
+
+## Iteration 4 — Comment Bot Rewrite (April 2026)
+- Rewrote `/app/backend/comment_bot.py` with rich markdown formatting
+- Severity-based sections: ⛔ Error / ⚠️ Warning / 💡 Suggestion
+- Each finding renders: Rule name, File location, Explanation, Suggestion, collapsible Code snippet
+- Score bar visualization using Unicode block characters
+- Stats summary line (X errors, Y warnings, Z suggestions)
+- Handles 3 input formats: static findings (rule/explanation/suggestion), LLM body-only, merged bracket format
+- Added POST /api/preview-comment endpoint for formatting preview
+- All tests passed
