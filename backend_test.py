@@ -11,7 +11,7 @@ from datetime import datetime
 import time
 
 class PRReviewBotTester:
-    def __init__(self, base_url="https://pr-perf-bot.preview.emergentagent.com"):
+    def __init__(self, base_url="https://253e16ce-73d8-4a78-81f3-a4f8b6e6507a.preview.emergentagent.com"):
         self.base_url = base_url
         self.session = requests.Session()
         self.session.headers.update({'Content-Type': 'application/json'})
@@ -923,6 +923,361 @@ index 1234567..abcdefg 100644
                 self.log(f"   ❌ Expected at least 3 findings, got {len(findings)}")
         return False, {}
 
+    # ─── Comment Formatting Tests ───────────────────────────────────────
+
+    def test_preview_comment_static_findings(self):
+        """Test preview-comment with static analysis findings"""
+        static_findings = [
+            {
+                "path": "src/main.cpp",
+                "line": 42,
+                "severity": "high",
+                "rule": "pass_by_value",
+                "explanation": "std::vector passed by value triggers a deep copy on every call",
+                "suggestion": "Pass by const reference: const std::vector<int>& data",
+                "snippet": "void process(std::vector<int> data) {"
+            },
+            {
+                "path": "src/utils.cpp", 
+                "line": 15,
+                "severity": "medium",
+                "rule": "map_over_unordered_map",
+                "explanation": "std::map uses O(log n) lookup, unordered_map gives O(1)",
+                "suggestion": "Use std::unordered_map unless you need sorted iteration"
+            }
+        ]
+        
+        success, response = self.run_test(
+            "Preview Comment - Static Findings",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": static_findings,
+                "summary": "Found 2 performance issues in C++ code",
+                "score": 65
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            # Check for severity headers
+            if "⛔ Performance Error" in markdown and "⚠️ Performance Warning" in markdown:
+                self.log("   ✅ Severity headers found in markdown")
+            else:
+                self.log("   ❌ Missing severity headers in markdown")
+                return False, {}
+                
+            # Check for rule names
+            if "**Rule:** `pass_by_value`" in markdown and "**Rule:** `map_over_unordered_map`" in markdown:
+                self.log("   ✅ Rule names found in markdown")
+            else:
+                self.log("   ❌ Missing rule names in markdown")
+                return False, {}
+                
+            # Check for code snippet
+            if "```cpp" in markdown and "void process(std::vector<int> data)" in markdown:
+                self.log("   ✅ Code snippet found in markdown")
+            else:
+                self.log("   ❌ Missing code snippet in markdown")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_empty_list(self):
+        """Test preview-comment with empty comments list"""
+        success, response = self.run_test(
+            "Preview Comment - Empty List",
+            "POST", 
+            "preview-comment",
+            200,
+            {
+                "comments": [],
+                "summary": "No issues found",
+                "score": 100
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            if "No issues found. Code looks good! :white_check_mark:" in markdown:
+                self.log("   ✅ Empty list message found")
+            else:
+                self.log("   ❌ Missing empty list message")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_llm_style(self):
+        """Test preview-comment with LLM-style comments (body field only)"""
+        llm_comments = [
+            {
+                "path": "src/algorithm.cpp",
+                "line": 23,
+                "severity": "medium",
+                "body": "This nested loop has O(n²) complexity which could be optimized"
+            }
+        ]
+        
+        success, response = self.run_test(
+            "Preview Comment - LLM Style",
+            "POST",
+            "preview-comment", 
+            200,
+            {
+                "comments": llm_comments,
+                "summary": "Algorithm complexity analysis",
+                "score": 70
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            if "This nested loop has O(n²) complexity" in markdown:
+                self.log("   ✅ LLM comment body found in explanation section")
+            else:
+                self.log("   ❌ Missing LLM comment in markdown")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_mixed_severities(self):
+        """Test preview-comment with mixed severities to check sorting"""
+        mixed_comments = [
+            {
+                "path": "test.cpp",
+                "line": 30,
+                "severity": "low", 
+                "rule": "suggestion_rule",
+                "explanation": "Low priority suggestion",
+                "suggestion": "Consider this improvement"
+            },
+            {
+                "path": "test.cpp", 
+                "line": 10,
+                "severity": "high",
+                "rule": "error_rule", 
+                "explanation": "Critical performance issue",
+                "suggestion": "Fix this immediately"
+            },
+            {
+                "path": "test.cpp",
+                "line": 20,
+                "severity": "medium",
+                "rule": "warning_rule",
+                "explanation": "Moderate performance concern", 
+                "suggestion": "Should be addressed"
+            }
+        ]
+        
+        success, response = self.run_test(
+            "Preview Comment - Mixed Severities",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": mixed_comments,
+                "summary": "Mixed severity analysis",
+                "score": 60
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            # Check that high severity appears before medium and low
+            high_pos = markdown.find("Critical performance issue")
+            med_pos = markdown.find("Moderate performance concern")
+            low_pos = markdown.find("Low priority suggestion")
+            
+            if high_pos < med_pos < low_pos:
+                self.log("   ✅ Comments sorted by severity (high -> medium -> low)")
+            else:
+                self.log("   ❌ Comments not properly sorted by severity")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_score_bar(self):
+        """Test that score bar visualization is included"""
+        success, response = self.run_test(
+            "Preview Comment - Score Bar",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": [],
+                "summary": "Score bar test",
+                "score": 75
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            if "**75/100**" in markdown and "█" in markdown:
+                self.log("   ✅ Score bar with filled blocks found")
+            else:
+                self.log("   ❌ Missing score bar visualization")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_stats_line(self):
+        """Test that stats line counting errors/warnings/suggestions is included"""
+        comments_with_stats = [
+            {"severity": "high", "rule": "error1", "explanation": "Error 1", "suggestion": "Fix 1"},
+            {"severity": "high", "rule": "error2", "explanation": "Error 2", "suggestion": "Fix 2"},
+            {"severity": "medium", "rule": "warn1", "explanation": "Warning 1", "suggestion": "Fix 3"},
+            {"severity": "low", "rule": "info1", "explanation": "Info 1", "suggestion": "Fix 4"}
+        ]
+        
+        success, response = self.run_test(
+            "Preview Comment - Stats Line",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": comments_with_stats,
+                "summary": "Stats line test",
+                "score": 50
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            if "⛔ 2 error(s)" in markdown and "⚠️ 1 warning(s)" in markdown and "💡 1 suggestion(s)" in markdown:
+                self.log("   ✅ Stats line with correct counts found")
+            else:
+                self.log("   ❌ Missing or incorrect stats line")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_merged_format(self):
+        """Test preview-comment with merged format '[rule] explanation — suggestion'"""
+        merged_comments = [
+            {
+                "path": "src/parser.cpp",
+                "line": 55,
+                "severity": "medium",
+                "body": "[inefficient_algorithm] This algorithm runs in O(n²) time — Consider using a hash table for O(n) lookup"
+            }
+        ]
+        
+        success, response = self.run_test(
+            "Preview Comment - Merged Format",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": merged_comments,
+                "summary": "Merged format test",
+                "score": 80
+            }
+        )
+        
+        if success and "markdown" in response:
+            markdown = response["markdown"]
+            if "**Rule:** `inefficient_algorithm`" in markdown and "This algorithm runs in O(n²) time" in markdown and "Consider using a hash table" in markdown:
+                self.log("   ✅ Merged format correctly parsed into separate sections")
+            else:
+                self.log("   ❌ Merged format not properly parsed")
+                return False, {}
+                
+        return success, response
+
+    def test_preview_comment_auth_required(self):
+        """Test that preview-comment requires authentication"""
+        # Create new session without login
+        temp_session = requests.Session()
+        temp_session.headers.update({'Content-Type': 'application/json'})
+        url = f"{self.base_url}/api/preview-comment"
+        
+        self.tests_run += 1
+        self.log(f"🔍 Testing Preview Comment - Auth Required...")
+        
+        try:
+            response = temp_session.post(url, json={
+                "comments": [],
+                "summary": "Test",
+                "score": 100
+            })
+            
+            if response.status_code == 401:
+                self.tests_passed += 1
+                self.log("   ✅ 401 Unauthorized without authentication")
+                return True, {}
+            else:
+                self.log(f"   ❌ Expected 401, got {response.status_code}")
+                return False, {}
+                
+        except Exception as e:
+            self.log(f"   ❌ Error: {str(e)}")
+            return False, {}
+
+    def test_analyze_cpp_integration(self):
+        """Test full pipeline: analyze-cpp -> preview-comment"""
+        cpp_code = """
+void process(std::vector<int> data) {
+    std::map<int, std::string> cache;
+    for (int i = 0; i < data.size(); i++) {
+        cache[i] = std::to_string(data[i]);
+    }
+}
+"""
+        
+        # First get C++ analysis
+        success, cpp_response = self.run_test(
+            "C++ Analysis for Integration",
+            "POST",
+            "analyze-cpp",
+            200,
+            {
+                "code": cpp_code,
+                "file_path": "test.cpp",
+                "start_line": 1
+            }
+        )
+        
+        if not success:
+            return False, {}
+            
+        # Convert findings to comment format
+        findings = cpp_response.get("findings", [])
+        comments = []
+        for finding in findings:
+            comments.append({
+                "path": "test.cpp",
+                "line": finding["line"],
+                "severity": finding["severity"],
+                "rule": finding["rule"],
+                "explanation": finding["explanation"],
+                "suggestion": finding["suggestion"],
+                "snippet": finding.get("snippet", "")
+            })
+        
+        # Test preview with those findings
+        success, preview_response = self.run_test(
+            "Preview with C++ Findings",
+            "POST",
+            "preview-comment",
+            200,
+            {
+                "comments": comments,
+                "summary": "C++ static analysis complete",
+                "score": 60
+            }
+        )
+        
+        if success and "markdown" in preview_response:
+            markdown = preview_response["markdown"]
+            if "pass_by_value" in markdown or "map_over_unordered_map" in markdown:
+                self.log("   ✅ C++ findings successfully formatted in preview")
+            else:
+                self.log("   ❌ C++ findings not found in preview markdown")
+                return False, {}
+                
+        return success, preview_response
+
 def main():
     print("=" * 60)
     print("🚀 PR Review Bot API Testing")
@@ -965,6 +1320,17 @@ def main():
         ("C++ Analyzer - Endl Flush", tester.test_cpp_analyzer_endl_flush),
         ("C++ Analyzer - Inefficient Find", tester.test_cpp_analyzer_inefficient_find),
         ("C++ Analyzer - Findings Structure", tester.test_cpp_analyzer_findings_structure),
+        
+        # Comment Formatting Tests (require authentication)
+        ("Preview Comment - Static Findings", tester.test_preview_comment_static_findings),
+        ("Preview Comment - Empty List", tester.test_preview_comment_empty_list),
+        ("Preview Comment - LLM Style", tester.test_preview_comment_llm_style),
+        ("Preview Comment - Mixed Severities", tester.test_preview_comment_mixed_severities),
+        ("Preview Comment - Score Bar", tester.test_preview_comment_score_bar),
+        ("Preview Comment - Stats Line", tester.test_preview_comment_stats_line),
+        ("Preview Comment - Merged Format", tester.test_preview_comment_merged_format),
+        ("Preview Comment - Auth Required", tester.test_preview_comment_auth_required),
+        ("C++ Integration Pipeline", tester.test_analyze_cpp_integration),
         
         ("Logout", tester.test_auth_logout),
         ("Unauthorized Access", tester.test_invalid_auth),

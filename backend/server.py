@@ -22,7 +22,7 @@ from models import (
 )
 from github_client import validate_webhook_signature, fetch_pr_diff
 from analyzer import analyze_diff
-from comment_bot import post_review_comment
+from comment_bot import post_review_comment, format_review_body
 from diff_parser import parse_diff
 from cpp_analyzer import analyze_cpp, analyze_cpp_blocks
 
@@ -457,6 +457,11 @@ class CppAnalyzeRequest(_BM):
     file_path: str = "<input>"
     start_line: int = 1
 
+class PreviewCommentRequest(_BM):
+    comments: list = []
+    summary: str = "Analysis complete."
+    score: int = 75
+
 @api_router.post("/parse-diff")
 async def parse_diff_endpoint(body: DiffParseRequest, request: Request):
     """Parse a raw unified diff and return structured code blocks."""
@@ -500,6 +505,14 @@ async def analyze_cpp_endpoint(body: CppAnalyzeRequest, request: Request):
         "low": len(report.by_severity("low")),
         "findings": report.to_dicts(),
     }
+
+
+@api_router.post("/preview-comment")
+async def preview_comment_endpoint(body: PreviewCommentRequest, request: Request):
+    """Preview the formatted markdown that would be posted to GitHub."""
+    await get_current_user(request)
+    markdown = format_review_body(body.comments, body.summary, body.score)
+    return {"markdown": markdown}
 
 
 # ─── Include Router & Middleware ──────────────────────────────────────
